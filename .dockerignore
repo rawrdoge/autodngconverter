@@ -1,0 +1,26 @@
+# Secrets / local config
+.env
+
+# Local test data and sample RAW files
+testdata/
+DSCN6496.NRW
+
+# Build artifacts
+rawimport-pipeline
+rawimport-pipeline.exe
+rawimport.exe
+*.exe
+build.log
+
+# Git metadata
+.git
+vibelabdng/.git
+
+# Rust build cache (rebuilt inside the dnglab stage)
+vibelabdng/target/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+Thumbs.db

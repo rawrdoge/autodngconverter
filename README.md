@@ -36,31 +36,30 @@ credits these contributors:
 The original code in this repository (the Go service, the Lua plugin, and the
 docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.
 
+## Container image
+
+The image is built automatically and published to GitHub Container Registry on
+every push to `main`:
+
+```
+ghcr.io/rawrdoge/autodngconverter:latest
+```
+
+The `dnglab` converter from the `vibelabdng` submodule is compiled into the
+image at build time, so `DNGLAB_BIN` already points at the baked-in binary. You
+do not need to build or mount anything to convert files.
+
 ## Running with Docker
 
 The service is designed to run as a container alongside MariaDB. A
-`docker-compose.yml` is included.
-
-### Build the submodule first
-
-The converter binary comes from the `vibelabdng` submodule. Build it before
-running Docker (the Dockerfile expects the binary on the build context, or you
-mount a prebuilt binary). To build it:
-
-```
-git submodule update --init --recursive
-cd vibelabdng
-cargo build --release
-cd ..
-```
+`docker-compose.yml` is included that pulls the published image.
 
 ### docker-compose.yml
 
 ```yaml
 services:
   rawimport:
-    build: .
-    image: rawimport-pipeline:latest
+    image: ghcr.io/rawrdoge/autodngconverter:latest
     container_name: rawimport
     restart: unless-stopped
     environment:

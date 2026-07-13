@@ -3,8 +3,7 @@
 # Set DB_PASSWORD / DB_ROOT_PASSWORD via environment or a .env file.
 services:
   rawimport:
-    build: .
-    image: rawimport-pipeline:latest
+    image: ghcr.io/rawrdoge/autodngconverter:latest
     container_name: rawimport
     restart: unless-stopped
     environment:

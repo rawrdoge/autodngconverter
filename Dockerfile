@@ -1,6 +1,13 @@
-# RawImport Pipeline — container image (PRD §6.1)
-# Multi-stage: build the Go binary, run on a slim Debian base with dnglab.
-FROM golang:1.22-bookworm AS build
+# RawImport Pipeline — container image
+# Multi-stage: build the dnglab converter (Rust), build the Go binary,
+# run on a slim Debian base with both baked in.
+FROM rust:1-bookworm AS dnglab
+WORKDIR /build
+COPY vibelabdng/ ./
+RUN cargo build --release \
+    && strip target/release/dnglab
+
+FROM golang:1.22-bookworm AS gobuild
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,10 +18,9 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl exiftool \
     && rm -rf /var/lib/apt/lists/*
-# dnglab is fetched at runtime via DNGLAB_BIN or expected on PATH; mount or
-# bake it here. For local builds, copy a prebuilt dnglab binary:
-# COPY dnglab /usr/local/bin/dnglab
-COPY --from=build /out/rawimport-pipeline /usr/local/bin/rawimport-pipeline
+
+COPY --from=dnglab /build/target/release/dnglab /usr/local/bin/dnglab
+COPY --from=gobuild /out/rawimport-pipeline /usr/local/bin/rawimport-pipeline
 
 VOLUME ["/watch", "/output", "/archive", "/db"]
 ENV WATCH_DIR=/watch \
@@ -24,6 +30,7 @@ ENV WATCH_DIR=/watch \
     DB_HOST=mariadb \
     DB_PORT=3306 \
     CONVERTER_ENGINE=dnglab \
+    DNGLAB_BIN=/usr/local/bin/dnglab \
     EXIFTOOL_BIN=exiftool \
     PORT=8080
 
