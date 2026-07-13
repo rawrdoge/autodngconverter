@@ -74,18 +74,24 @@ func (w *Worker) ReconcileLibrary() error {
 		}
 	}
 
-	// Warn the operator that a populated library was detected and RAWs cannot
-	// be systematically matched without re-converting.
-	msg := fmt.Sprintf(
-		"Existing photo library detected (output=%s, archive=%s): found %d pre-converted IMG_*.dng file(s) "+
-			"(highest IMG_%d). Registered %d as unmatched 'legacy' placeholders. "+
-			"The library cannot be systematically matched to RAW sources without re-converting; "+
-			"new RAW imports will continue cleanly from IMG_%d onward with verified raw-to-DNG hashes.",
-		w.cfg.OutputDir, w.cfg.ArchiveDir, len(matches), maxN, registered, maxN+1)
-	if err := w.store.InsertAlert("warning", "legacy_library", msg, ""); err != nil {
-		log.Printf("reconcile: alert insert error: %v", err)
+	// Warn the operator only when we actually registered NEW legacy placeholders
+	// (i.e. on first container initialization against a populated library). On
+	// subsequent restarts everything is already registered (idempotent), so we
+	// skip the alert to avoid spamming it on every boot.
+	if registered > 0 {
+		msg := fmt.Sprintf(
+			"Existing photo library detected (output=%s, archive=%s): found %d pre-converted IMG_*.dng file(s) "+
+				"(highest IMG_%d). Registered %d as unmatched 'legacy' placeholders. "+
+				"The library cannot be systematically matched to RAW sources without re-converting; "+
+				"new RAW imports will continue cleanly from IMG_%d onward with verified raw-to-DNG hashes.",
+			w.cfg.OutputDir, w.cfg.ArchiveDir, len(matches), maxN, registered, maxN+1)
+		if err := w.store.InsertAlert("warning", "legacy_library", msg, ""); err != nil {
+			log.Printf("reconcile: alert insert error: %v", err)
+		}
+		log.Printf("reconcile: %s", msg)
+	} else {
+		log.Printf("reconcile: %d pre-existing IMG_*.dng already registered as legacy; no new placeholders", len(matches))
 	}
-	log.Printf("reconcile: %s", msg)
 	return nil
 }
 
