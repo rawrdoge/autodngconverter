@@ -86,3 +86,59 @@ Single Go/Echo binary (`rawimport-pipeline`) implementing the full PRD §5 happy
 - `libraw`/`adobedng` engines are stubs (dnglab default works).
 - EXIF `CameraModel` empty in test (exiftool path on test host not the bundled one; configurable via `EXIFTOOL_BIN`).
 - Postgres/SQLite drivers deferred.
+
+---
+
+## Nomenclature-Aware Sequencing (added 2026-07-13)
+
+**Feature:** On startup the worker scans BOTH `/output` and `/archive` for pre-existing
+`IMG_{n}.dng` files not yet in the DB. Each is registered as a `legacy` placeholder
+(status=`legacy`, synthetic source hash `legacy:IMG_{n}`, empty source_path for later
+manual RAW matching). The global sequence is then reserved past the highest on-disk
+number so newly imported RAW files never collide with or get re-converted over the
+existing library. A `warning` alert (category `legacy_library`) is raised telling the
+operator the existing library cannot be systematically matched to RAWs without
+re-converting, and that new imports continue cleanly with verified raw-to-DNG hashes.
+
+**Files:**
+- `reconcile.go` — `ReconcileLibrary()` (scans OutputDir + ArchiveDir recursively via
+  `filepath.WalkDir`), `findSequencedDNGs` (regex `^IMG_(\d+)\.dng$`, SHA-256 each),
+  `registerLegacy` (allocates sequence, inserts `legacy` row), `reserveSequencesUpTo`
+  (burns sequence IDs up to max on-disk n), `folderOf` (derives YYYY/MM).
+- `db.go` — `HasOutputHash()` idempotency guard for the scan.
+- `migrations/0003_legacy_status.sql` — adds `'legacy'` to the `imports.status` ENUM.
+- `main.go` — `ReconcileLibrary()` called once after `Migrate()`, before `worker.Start()`.
+
+**Notes / gotchas:**
+- Go `1.26` is REQUIRED (go.mod `go >= 1.26`). Dockerfile base = `golang:1.26-bookworm`.
+  The CI failed once because the committed Dockerfile still said `1.22-bookworm` — the
+  Go bump + workflow bump had never actually been committed (only lived in the working
+  tree). Always `git add -A` + verify via API `contents/Dockerfile?ref=main` before trusting a push.
+- The `legacy` source_hash uses the `legacy:` prefix so it can never collide with a real
+  64-hex SHA-256 (idempotency + corruption monitor safe).
+
+---
+
+## vibelabdng submodule — re-forked (2026-07-13)
+
+- `vibelabdng` was deleted in GitHub UI and re-forked from `dnglab/dnglab` so it is now
+  **officially linked as a fork** (`parent: dnglab/dnglab`). URL unchanged
+  (`github.com/rawrdoge/vibelabdng`), so `.gitmodules` needed no edit.
+- Current `main` = `422b8c56`: carries the `reembed` subcommand (from local work) + the
+  two CI action-bump commits (checkout v7, cache v6, upload-artifact v7, action-gh-release v3).
+- autodngconverter's submodule pointer now references `422b8c56` (the re-fork's HEAD).
+- The GitHub MCP server / cached token (scopes: `repo`, `gist`, `workflow`) CANNOT delete
+  repos (no `delete_repo` scope) — repo deletion must be done manually in Settings.
+
+---
+
+## CI / build hygiene (2026-07-13)
+
+- `Dockerfile` MUST stay on `golang:1.26-bookworm` (matches go.mod).
+- `.github/workflows/docker-image.yml` uses Node-24-compatible action majors to avoid the
+  "Node 20 deprecated" warning: `checkout@v7`, `setup-buildx-action@v4`, `login-action@v4`,
+  `metadata-action@v6`, `build-push-action@v7`.
+- `vibelabdng` CI (`ci.yaml`, `release.yaml`) bumped similarly: checkout/upload-artifact v7,
+  cache v6, action-gh-release v3. Its `release.yaml` still had `checkout@v2` (Node 16!) before.
+- Local branch is `master`; remote default is `main`. Push with `git push origin master:main`.
+- Do NOT commit `logs_*/` CI dump directories — added to `.gitignore` (`logs_*/`).
