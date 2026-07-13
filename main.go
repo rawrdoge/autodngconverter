@@ -33,6 +33,12 @@ func main() {
 	}
 
 	worker := NewWorker(cfg, store, engine)
+	// Nomenclature-aware sequencing: register any pre-existing IMG_*.dng in the
+	// output volume as 'legacy' placeholders and advance the sequence so new
+	// imports never collide with the existing library (PRD §4.2.4, Q13).
+	if err := worker.ReconcileLibrary(); err != nil {
+		log.Printf("reconcile warning: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	worker.Start(ctx)

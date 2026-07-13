@@ -7,7 +7,7 @@ COPY vibelabdng/ ./
 RUN cargo build --release \
     && strip target/release/dnglab
 
-FROM golang:1.26-bookworm AS gobuild
+FROM golang:1.22-bookworm AS gobuild
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -134,6 +134,14 @@ func (s *Store) HasSourceHash(h string) (bool, error) {
 	return n > 0, err
 }
 
+// HasOutputHash reports whether an output DNG path is already registered
+// (used by the nomenclature-aware reconcile scan, Q13).
+func (s *Store) HasOutputHash(h string) (bool, error) {
+	var n int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM imports WHERE output_hash = ?", h).Scan(&n)
+	return n > 0, err
+}
+
 // InsertImport writes the atomic import record (PRD §5.1 step 12).
 func (s *Store) InsertImport(rec ImportRecord) error {
 	_, err := s.db.Exec(`INSERT INTO imports
