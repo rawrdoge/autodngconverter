@@ -1,0 +1,57 @@
+# RawImport Pipeline — Docker Compose (PRD §6.3, MariaDB multi-node capable)
+# Usage: docker compose up -d
+# Set DB_PASSWORD / DB_ROOT_PASSWORD via environment or a .env file.
+services:
+  rawimport:
+    build: .
+    image: rawimport-pipeline:latest
+    container_name: rawimport
+    restart: unless-stopped
+    environment:
+      - DB_DRIVER=mariadb
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=rawimport
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=rawimport
+      - DB_SSLMODE=disable
+      - WATCH_DIR=/watch
+      - OUTPUT_DIR=/output
+      - ARCHIVE_DIR=/archive
+      - CONVERTER_ENGINE=dnglab
+      - EXIFTOOL_BIN=exiftool
+      - FOLDER_SCHEMA=%Y/%m
+      - FILE_PATTERN=IMG_{seq}
+      - POLL_INTERVAL=10
+      - LOG_LEVEL=info
+      - PORT=8080
+    volumes:
+      - /mnt/nas/photos/watch:/watch
+      - /mnt/nas/photos/output:/output
+      - /mnt/nas/photos/archive:/archive
+    ports:
+      - "8080:8080"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:10.11-jammy
+    container_name: rawimport_mariadb
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=rawimport
+      - MARIADB_USER=rawimport
+      - MARIADB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mariadb-data:

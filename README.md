@@ -1,0 +1,231 @@
+# autodngconverter
+
+A containerized pipeline that watches a folder for camera RAW files (NRW, NEF,
+CR2, ARW), converts them to DNG, assigns a global monotonic `IMG_{n}` sequence,
+and records SHA-256 hashes of source and output in a MariaDB database. A
+Darktable Lua plugin lets you re-embed an edited preview back into a DNG and
+keep the database hash in sync.
+
+This project was built with AI assistance (vibe coded). It is a personal tool,
+not a hardened product. Expect rough edges, missing tests, and behavior that
+has only been exercised on the author's own hardware. Use it at your own risk
+and verify your files before trusting it with anything you cannot lose.
+
+## Repository layout
+
+This is one of two repositories:
+
+- `autodngconverter` (this repo): the Go service, the Darktable Lua plugin,
+  the SQL migrations, and the Docker files.
+- `vibelabdng`: a fork of [DNGLab](https://github.com/dnglab/dnglab) that adds
+  a `reembed` subcommand. It is pulled in here as a git submodule under
+  `vibelabdng/`.
+
+## Credits and license
+
+The `vibelabdng/` subtree is a fork of DNGLab, originally created in 2021 by
+Daniel Vogelbacher and released under the GNU Lesser General Public License
+v2.1. The fork keeps the original `LICENSE` and `AUTHORS` files intact. DNGLab
+credits these contributors:
+
+- Alfred Gutierrez (BMFF box parsing from mp4-rust)
+- Andrew Baldwin (lossless JPEG-92 compression)
+- Pedro Corte-Real (rawloader rust library)
+- Alexey Danilchenko and Alex Tutubalin / LibRaw LLC (crx decoder from libraw)
+
+The original code in this repository (the Go service, the Lua plugin, and the
+docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.
+
+## Running with Docker
+
+The service is designed to run as a container alongside MariaDB. A
+`docker-compose.yml` is included.
+
+### Build the submodule first
+
+The converter binary comes from the `vibelabdng` submodule. Build it before
+running Docker (the Dockerfile expects the binary on the build context, or you
+mount a prebuilt binary). To build it:
+
+```
+git submodule update --init --recursive
+cd vibelabdng
+cargo build --release
+cd ..
+```
+
+### docker-compose.yml
+
+```yaml
+services:
+  rawimport:
+    build: .
+    image: rawimport-pipeline:latest
+    container_name: rawimport
+    restart: unless-stopped
+    environment:
+      - DB_DRIVER=mariadb
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=rawimport
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=rawimport
+      - DB_SSLMODE=disable
+      - WATCH_DIR=/watch
+      - OUTPUT_DIR=/output
+      - ARCHIVE_DIR=/archive
+      - CONVERTER_ENGINE=dnglab
+      - EXIFTOOL_BIN=exiftool
+      - FOLDER_SCHEMA=%Y/%m
+      - FILE_PATTERN=IMG_{seq}
+      - POLL_INTERVAL=10
+      - LOG_LEVEL=info
+      - PORT=8080
+    volumes:
+      - /mnt/nas/photos/watch:/watch
+      - /mnt/nas/photos/output:/output
+      - /mnt/nas/photos/archive:/archive
+    ports:
+      - "8080:8080"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:10.11-jammy
+    container_name: rawimport_mariadb
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=rawimport
+      - MARIADB_USER=rawimport
+      - MARIADB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mariadb-data:
+```
+
+Set `DB_PASSWORD` and `DB_ROOT_PASSWORD` in a `.env` file next to the compose
+file (it is gitignored and never committed). Then:
+
+```
+docker compose up -d
+```
+
+The watcher picks up files dropped into the `watch` volume, converts them, and
+writes DNGs to `output` and the originals to `archive`.
+
+## Environment variables
+
+All configuration is via environment variables. Defaults are shown in
+parentheses.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `DB_DRIVER` | Database backend. Only `mariadb` is implemented in v1. | `mariadb` |
+| `DB_HOST` | MariaDB host. | `mariadb` |
+| `DB_PORT` | MariaDB port. | `3306` |
+| `DB_USER` | MariaDB user. | (empty) |
+| `DB_PASSWORD` | MariaDB password. | (empty) |
+| `DB_NAME` | MariaDB database name. | `rawimport` |
+| `DB_SSLMODE` | TLS mode for the DB connection. | (empty) |
+| `WATCH_DIR` | Directory the watcher scans for new RAW files. | `/watch` |
+| `OUTPUT_DIR` | Directory DNGs are written to. | `/output` |
+| `ARCHIVE_DIR` | Directory original RAW files are moved to after conversion. | `/archive` |
+| `CONVERTER_ENGINE` | Converter to use. `dnglab` is the default. | `dnglab` |
+| `DNGLAB_BIN` | Path to the vibelabdng/dnglab binary. | `dnglab` |
+| `EXIFTOOL_BIN` | Path to the exiftool binary (used by the re-embed path). | `exiftool` |
+| `FOLDER_SCHEMA` | Output subfolder layout, `strftime` format. | `%Y/%m` |
+| `FILE_PATTERN` | Output filename pattern. `{seq}` becomes the monotonic `IMG_{n}`. | `IMG_{seq}` |
+| `POLL_INTERVAL` | Watcher poll interval in seconds. | `10` |
+| `LOG_LEVEL` | Log verbosity (`debug`, `info`, `warn`, `error`). | `info` |
+| `PORT` | Port the REST API listens on. | `8080` |
+| `API_TOKEN` | Optional bearer token. If set, the preview-updated notify endpoint requires `Authorization: Bearer <API_TOKEN>`. | (empty) |
+| `ALERT_PUSH_URL` | Optional URL to push alert webhooks to. | (empty) |
+
+## Commands and endpoints
+
+The container runs a single binary that starts the watcher, converter, hasher,
+and a small REST API. There is no CLI subcommand surface; interaction is
+through the API and the Darktable plugin.
+
+REST API (listening on `PORT`):
+
+- `GET /api/v1/imports?page=1&limit=50&status=completed` — list imports.
+- `GET /api/v1/imports/{sequence}` — get one record by `IMG_{n}`.
+- `GET /api/v1/imports/hash/{sha256}` — find a record by source or output hash.
+- `POST /api/v1/imports/{sequence}/reconvert` — queue a re-conversion.
+- `GET /api/v1/stats` — conversion counts and failure rates.
+- `GET /api/v1/imports/by-path/preview-updated` — notify endpoint the Darktable plugin calls after a preview re-embed (updates the stored `output_hash`).
+- `GET /health` — liveness/readiness probe.
+
+Darktable plugin (`betterembeds.lua`):
+
+Install the script in Darktable, select DNGs in Lighttable, and click
+"Export & Embed Previews". By default it uses ExifTool (fast tag swap). A
+dropdown switches to the `vibelabdng reembed` worker for a native
+multi-resolution Adobe preview. After a successful embed the plugin POSTs to
+the API so the stored `output_hash` stays correct and the corruption monitor
+does not false-positive.
+
+Set these in the Darktable environment so the plugin can reach the API:
+
+```
+RAWIMPORT_API_URL=http://localhost:8080
+API_TOKEN=            # optional; enables bearer auth on the notify endpoint
+```
+
+## Building without Docker
+
+```
+go build -o rawimport-pipeline .
+```
+
+Copy `.env.example` to `.env` and fill in your MariaDB credentials.
+
+## Goals
+
+The pipeline exists to solve a few concrete problems with ad-hoc RAW
+workflows:
+
+- Run the conversion as a containerized service on a NAS instead of a fragile
+  shell script tied to one host.
+- Convert camera RAW files (NRW, NEF, CR2, ARW) to DNG with a verifiable
+  preview structure.
+- Assign a global, monotonic `IMG_{n}` sequence so every output has a unique,
+  stable name.
+- Record SHA-256 of both the source RAW and the output DNG, linked to the
+  sequence, so corruption months later can be detected and traced.
+- Support re-conversion (for example, to change the preview for Windows
+  compatibility) without losing the provenance of the original file.
+
+## Deferred and future work
+
+Out of scope for the current version:
+
+- Cloud storage backends (S3, B2).
+- ML-based duplicate detection.
+- Automatic RAW development via Darktable CLI.
+- Multi-tenant isolation.
+- Real-time sync to Immich or DigiKam.
+
+Possible later work, in rough order:
+
+- PostgreSQL backend for multi-node setups, plus CR2/ARW/RAF support and
+  EXIF-based auto-tagging.
+- Darktable CLI integration for automatic development, an Immich API webhook
+  to push after conversion, and a cold-storage tier for old RAW files.
+- A distributed job queue for scaling the converter, ML-based scene
+  detection for folder organization, and a mobile monitoring app.
+
+## Status
+
+Early, unfinished, and shared as-is under free and open source licenses.

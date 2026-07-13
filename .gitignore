@@ -1,0 +1,21 @@
+# Secrets / local config
+.env
+
+# Build artifacts
+rawimport-pipeline
+rawimport-pipeline.exe
+rawimport.exe
+build.log
+
+# Local test data
+testdata/
+
+# Go
+*.test
+*.out
+
+# Temp downloads
+mariadb.zip
+
+# Stale local copy of the fork (replaced by the vibelabdng submodule)
+dnglab/

@@ -1,0 +1,25 @@
+autodngconverter
+Copyright (c) 2026 rawrdoge
+
+This project builds on DNGLab, a camera RAW to DNG converter.
+
+DNGLab
+Originally created in 2021 by Daniel Vogelbacher.
+Licensed under the GNU Lesser General Public License v2.1.
+Upstream: https://github.com/dnglab/dnglab
+
+The `vibelabdng/` subdirectory in this repository is a fork of DNGLab that
+adds a `reembed` subcommand. It retains DNGLab's original LGPL-2.1 license
+and AUTHORS file.
+
+DNGLab contributors (from the upstream AUTHORS file):
+
+  Alfred Gutierrez   - BMFF box parsing from mp4-rust
+  Andrew Baldwin     - Lossless JPEG-92 compression
+  Pedro Corte-Real   - rawloader rust library
+  Alexey Danilchenko - crx decoder crx.cpp from libraw
+  Alex Tutubalin,
+    LibRaw LLC       - crx decoder crx.cpp from libraw
+
+The autodngconverter glue code (Go service, Darktable Lua plugin, and
+documentation) is licensed separately under the MIT License. See LICENSE.
