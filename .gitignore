@@ -19,3 +19,6 @@ mariadb.zip
 
 # Stale local copy of the fork (replaced by the vibelabdng submodule)
 dnglab/
+
+# CI log dumps
+logs_*/
