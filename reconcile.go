@@ -15,22 +15,29 @@ import (
 var imgNameRe = regexp.MustCompile(`^IMG_(\d+)\.dng$`)
 
 // ReconcileLibrary implements nomenclature-aware sequencing (PRD §4.2.4, Q13).
-// On startup it scans the output volume for pre-existing IMG_{n}.dng files that
-// are not yet in the database. Each is registered as a 'legacy' placeholder so
-// the global sequence continues cleanly after the highest existing number and
-// newly imported RAW files never collide with, or get re-converted over, the
-// existing library. A warning alert is raised when a populated library is found
-// because RAW->DNG provenance cannot be reconstructed without re-converting.
+// On startup it scans the output AND archive volumes for pre-existing
+// IMG_{n}.dng files that are not yet in the database. Each is registered as a
+// 'legacy' placeholder so the global sequence continues cleanly after the
+// highest existing number and newly imported RAW files never collide with, or
+// get re-converted over, the existing library. A warning alert is raised when a
+// populated library is found because RAW->DNG provenance cannot be reconstructed
+// without re-converting.
 func (w *Worker) ReconcileLibrary() error {
-	root := w.cfg.OutputDir
-	matches, err := findSequencedDNGs(root)
-	if err != nil {
-		// A missing/unmounted output dir is not fatal; just skip reconcile.
-		log.Printf("reconcile: scan skipped (%v)", err)
-		return nil
+	// Scan both the live output tree and the archived tree; a populated library
+	// may live in either (or both) depending on retention policy.
+	roots := []string{w.cfg.OutputDir, w.cfg.ArchiveDir}
+	var matches []sequencedDNG
+	for _, root := range roots {
+		found, err := findSequencedDNGs(root)
+		if err != nil {
+			// A missing/unmounted volume is not fatal; just skip it.
+			log.Printf("reconcile: scan skipped for %s (%v)", root, err)
+			continue
+		}
+		matches = append(matches, found...)
 	}
 	if len(matches) == 0 {
-		log.Printf("reconcile: no pre-existing IMG_*.dng found in %s", root)
+		log.Printf("reconcile: no pre-existing IMG_*.dng found in %s or %s", w.cfg.OutputDir, w.cfg.ArchiveDir)
 		return nil
 	}
 
@@ -70,11 +77,11 @@ func (w *Worker) ReconcileLibrary() error {
 	// Warn the operator that a populated library was detected and RAWs cannot
 	// be systematically matched without re-converting.
 	msg := fmt.Sprintf(
-		"Existing photo library detected in %s: found %d pre-converted IMG_*.dng file(s) "+
+		"Existing photo library detected (output=%s, archive=%s): found %d pre-converted IMG_*.dng file(s) "+
 			"(highest IMG_%d). Registered %d as unmatched 'legacy' placeholders. "+
 			"The library cannot be systematically matched to RAW sources without re-converting; "+
 			"new RAW imports will continue cleanly from IMG_%d onward with verified raw-to-DNG hashes.",
-		root, len(matches), maxN, registered, maxN+1)
+		w.cfg.OutputDir, w.cfg.ArchiveDir, len(matches), maxN, registered, maxN+1)
 	if err := w.store.InsertAlert("warning", "legacy_library", msg, ""); err != nil {
 		log.Printf("reconcile: alert insert error: %v", err)
 	}

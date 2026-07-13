@@ -1,0 +1,151 @@
+﻿2026-07-13T17:40:48.2626064Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-07-13T17:40:48.2627368Z ##[group]Run docker/metadata-action@v5
+2026-07-13T17:40:48.2627638Z with:
+2026-07-13T17:40:48.2627854Z   images: ghcr.io/rawrdoge/autodngconverter
+2026-07-13T17:40:48.2628262Z   tags: type=raw,value=latest,enable={{is_default_branch}}
+type=sha,format=short
+
+2026-07-13T17:40:48.2628712Z   context: workflow
+2026-07-13T17:40:48.2631449Z   github-token: ***
+2026-07-13T17:40:48.2631923Z env:
+2026-07-13T17:40:48.2632116Z   REGISTRY: ghcr.io
+2026-07-13T17:40:48.2632344Z   IMAGE_NAME: rawrdoge/autodngconverter
+2026-07-13T17:40:48.2632614Z ##[endgroup]
+2026-07-13T17:40:48.6475618Z (node:2963) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-07-13T17:40:48.6476970Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-07-13T17:40:48.8934140Z ##[group]Context info
+2026-07-13T17:40:48.8934594Z eventName: push
+2026-07-13T17:40:48.8934995Z sha: 3645eae0576c5ee1a0420baceb592b389771c46e
+2026-07-13T17:40:48.8935488Z ref: refs/heads/main
+2026-07-13T17:40:48.8935872Z workflow: Build and push image
+2026-07-13T17:40:48.8936276Z action: meta
+2026-07-13T17:40:48.8936595Z actor: rawrdoge
+2026-07-13T17:40:48.8936928Z runNumber: 5
+2026-07-13T17:40:48.8937242Z runId: 29271381474
+2026-07-13T17:40:48.8937767Z commitDate: Mon Jul 13 2026 17:40:18 GMT+0000 (Coordinated Universal Time)
+2026-07-13T17:40:48.8938677Z ##[endgroup]
+2026-07-13T17:40:48.8947498Z ##[group]Processing images input
+2026-07-13T17:40:48.8948104Z name=ghcr.io/rawrdoge/autodngconverter,enable=true
+2026-07-13T17:40:48.8948908Z ##[endgroup]
+2026-07-13T17:40:48.8960682Z ##[group]Processing tags input
+2026-07-13T17:40:48.8972457Z type=raw,value=latest,enable={{is_default_branch}},priority=200
+2026-07-13T17:40:48.8973648Z type=sha,format=short,prefix=sha-,enable=true,priority=100
+2026-07-13T17:40:48.8974742Z ##[endgroup]
+2026-07-13T17:40:48.8975609Z ##[group]Processing flavor input
+2026-07-13T17:40:48.8976045Z latest=auto
+2026-07-13T17:40:48.8976328Z prefix=
+2026-07-13T17:40:48.8976626Z prefixLatest=false
+2026-07-13T17:40:48.8976919Z suffix=
+2026-07-13T17:40:48.8977197Z suffixLatest=false
+2026-07-13T17:40:48.8977770Z ##[endgroup]
+2026-07-13T17:40:48.9028709Z ##[group]Docker image version
+2026-07-13T17:40:48.9029167Z latest
+2026-07-13T17:40:48.9029810Z ##[endgroup]
+2026-07-13T17:40:48.9035324Z ##[group]Docker tags
+2026-07-13T17:40:48.9035780Z ghcr.io/rawrdoge/autodngconverter:latest
+2026-07-13T17:40:48.9036327Z ghcr.io/rawrdoge/autodngconverter:sha-3645eae
+2026-07-13T17:40:48.9037056Z ##[endgroup]
+2026-07-13T17:40:48.9112857Z ##[group]Docker labels
+2026-07-13T17:40:48.9114564Z org.opencontainers.image.created=2026-07-13T17:40:48.896Z
+2026-07-13T17:40:48.9116582Z org.opencontainers.image.description=Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.
+2026-07-13T17:40:48.9118736Z org.opencontainers.image.licenses=NOASSERTION
+2026-07-13T17:40:48.9119753Z org.opencontainers.image.revision=3645eae0576c5ee1a0420baceb592b389771c46e
+2026-07-13T17:40:48.9120720Z org.opencontainers.image.source=https://github.com/rawrdoge/autodngconverter
+2026-07-13T17:40:48.9121712Z org.opencontainers.image.title=autodngconverter
+2026-07-13T17:40:48.9122462Z org.opencontainers.image.url=https://github.com/rawrdoge/autodngconverter
+2026-07-13T17:40:48.9123195Z org.opencontainers.image.version=latest
+2026-07-13T17:40:48.9123913Z ##[endgroup]
+2026-07-13T17:40:48.9124488Z ##[group]Annotations
+2026-07-13T17:40:48.9125018Z manifest:org.opencontainers.image.created=2026-07-13T17:40:48.896Z
+2026-07-13T17:40:48.9126825Z manifest:org.opencontainers.image.description=Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.
+2026-07-13T17:40:48.9128891Z manifest:org.opencontainers.image.licenses=NOASSERTION
+2026-07-13T17:40:48.9129728Z manifest:org.opencontainers.image.revision=3645eae0576c5ee1a0420baceb592b389771c46e
+2026-07-13T17:40:48.9130782Z manifest:org.opencontainers.image.source=https://github.com/rawrdoge/autodngconverter
+2026-07-13T17:40:48.9131915Z manifest:org.opencontainers.image.title=autodngconverter
+2026-07-13T17:40:48.9132770Z manifest:org.opencontainers.image.url=https://github.com/rawrdoge/autodngconverter
+2026-07-13T17:40:48.9133792Z manifest:org.opencontainers.image.version=latest
+2026-07-13T17:40:48.9134536Z ##[endgroup]
+2026-07-13T17:40:48.9135087Z ##[group]JSON output
+2026-07-13T17:40:48.9135573Z {
+2026-07-13T17:40:48.9135946Z   "tags": [
+2026-07-13T17:40:48.9136355Z     "ghcr.io/rawrdoge/autodngconverter:latest",
+2026-07-13T17:40:48.9136925Z     "ghcr.io/rawrdoge/autodngconverter:sha-3645eae"
+2026-07-13T17:40:48.9137397Z   ],
+2026-07-13T17:40:48.9137677Z   "tag-names": [
+2026-07-13T17:40:48.9137992Z     "latest",
+2026-07-13T17:40:48.9138291Z     "sha-3645eae"
+2026-07-13T17:40:48.9138598Z   ],
+2026-07-13T17:40:48.9138893Z   "labels": {
+2026-07-13T17:40:48.9139371Z     "org.opencontainers.image.created": "2026-07-13T17:40:48.896Z",
+2026-07-13T17:40:48.9142723Z     "org.opencontainers.image.description": "Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.",
+2026-07-13T17:40:48.9144468Z     "org.opencontainers.image.licenses": "NOASSERTION",
+2026-07-13T17:40:48.9145262Z     "org.opencontainers.image.revision": "3645eae0576c5ee1a0420baceb592b389771c46e",
+2026-07-13T17:40:48.9146323Z     "org.opencontainers.image.source": "https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9147258Z     "org.opencontainers.image.title": "autodngconverter",
+2026-07-13T17:40:48.9148138Z     "org.opencontainers.image.url": "https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9148977Z     "org.opencontainers.image.version": "latest"
+2026-07-13T17:40:48.9149547Z   },
+2026-07-13T17:40:48.9149850Z   "annotations": [
+2026-07-13T17:40:48.9150387Z     "manifest:org.opencontainers.image.created=2026-07-13T17:40:48.896Z",
+2026-07-13T17:40:48.9152614Z     "manifest:org.opencontainers.image.description=Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.",
+2026-07-13T17:40:48.9154554Z     "manifest:org.opencontainers.image.licenses=NOASSERTION",
+2026-07-13T17:40:48.9155488Z     "manifest:org.opencontainers.image.revision=3645eae0576c5ee1a0420baceb592b389771c46e",
+2026-07-13T17:40:48.9157641Z     "manifest:org.opencontainers.image.source=https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9158649Z     "manifest:org.opencontainers.image.title=autodngconverter",
+2026-07-13T17:40:48.9159556Z     "manifest:org.opencontainers.image.url=https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9160450Z     "manifest:org.opencontainers.image.version=latest"
+2026-07-13T17:40:48.9161221Z   ]
+2026-07-13T17:40:48.9161568Z }
+2026-07-13T17:40:48.9162194Z ##[endgroup]
+2026-07-13T17:40:48.9162846Z ##[group]Bake file definition (tags)
+2026-07-13T17:40:48.9163298Z {
+2026-07-13T17:40:48.9163601Z   "target": {
+2026-07-13T17:40:48.9163958Z     "docker-metadata-action": {
+2026-07-13T17:40:48.9164397Z       "tags": [
+2026-07-13T17:40:48.9164816Z         "ghcr.io/rawrdoge/autodngconverter:latest",
+2026-07-13T17:40:48.9165430Z         "ghcr.io/rawrdoge/autodngconverter:sha-3645eae"
+2026-07-13T17:40:48.9165960Z       ],
+2026-07-13T17:40:48.9166268Z       "args": {
+2026-07-13T17:40:48.9166749Z         "DOCKER_META_IMAGES": "ghcr.io/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9167659Z         "DOCKER_META_VERSION": "latest"
+2026-07-13T17:40:48.9168099Z       }
+2026-07-13T17:40:48.9168401Z     }
+2026-07-13T17:40:48.9168704Z   }
+2026-07-13T17:40:48.9169025Z }
+2026-07-13T17:40:48.9169616Z ##[endgroup]
+2026-07-13T17:40:48.9170376Z ##[group]Bake file definition (labels)
+2026-07-13T17:40:48.9170903Z {
+2026-07-13T17:40:48.9171381Z   "target": {
+2026-07-13T17:40:48.9171762Z     "docker-metadata-action": {
+2026-07-13T17:40:48.9172229Z       "labels": {
+2026-07-13T17:40:48.9172754Z         "org.opencontainers.image.created": "2026-07-13T17:40:48.896Z",
+2026-07-13T17:40:48.9174084Z         "org.opencontainers.image.description": "Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.",
+2026-07-13T17:40:48.9175365Z         "org.opencontainers.image.licenses": "NOASSERTION",
+2026-07-13T17:40:48.9175877Z         "org.opencontainers.image.revision": "3645eae0576c5ee1a0420baceb592b389771c46e",
+2026-07-13T17:40:48.9176521Z         "org.opencontainers.image.source": "https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9177053Z         "org.opencontainers.image.title": "autodngconverter",
+2026-07-13T17:40:48.9177561Z         "org.opencontainers.image.url": "https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9178052Z         "org.opencontainers.image.version": "latest"
+2026-07-13T17:40:48.9178349Z       }
+2026-07-13T17:40:48.9178527Z     }
+2026-07-13T17:40:48.9178681Z   }
+2026-07-13T17:40:48.9178856Z }
+2026-07-13T17:40:48.9179204Z ##[endgroup]
+2026-07-13T17:40:48.9179564Z ##[group]Bake file definition (annotations)
+2026-07-13T17:40:48.9179881Z {
+2026-07-13T17:40:48.9180047Z   "target": {
+2026-07-13T17:40:48.9180263Z     "docker-metadata-action": {
+2026-07-13T17:40:48.9180521Z       "annotations": [
+2026-07-13T17:40:48.9180877Z         "manifest:org.opencontainers.image.created=2026-07-13T17:40:48.896Z",
+2026-07-13T17:40:48.9182326Z         "manifest:org.opencontainers.image.description=Containerized Camera Raw-to-DNG import pipeline (Go service + Darktable Lua preview plugin). Uses the vibelabdng fork as a git submodule for preview re-embedding. Free and open source.",
+2026-07-13T17:40:48.9183434Z         "manifest:org.opencontainers.image.licenses=NOASSERTION",
+2026-07-13T17:40:48.9183980Z         "manifest:org.opencontainers.image.revision=3645eae0576c5ee1a0420baceb592b389771c46e",
+2026-07-13T17:40:48.9184661Z         "manifest:org.opencontainers.image.source=https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9185231Z         "manifest:org.opencontainers.image.title=autodngconverter",
+2026-07-13T17:40:48.9185903Z         "manifest:org.opencontainers.image.url=https://github.com/rawrdoge/autodngconverter",
+2026-07-13T17:40:48.9186448Z         "manifest:org.opencontainers.image.version=latest"
+2026-07-13T17:40:48.9186785Z       ]
+2026-07-13T17:40:48.9186952Z     }
+2026-07-13T17:40:48.9187129Z   }
+2026-07-13T17:40:48.9187306Z }
+2026-07-13T17:40:48.9187661Z ##[endgroup]
