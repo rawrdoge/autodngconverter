@@ -21,21 +21,6 @@ This is one of two repositories:
   a `reembed` subcommand. It is pulled in here as a git submodule under
   `vibelabdng/`.
 
-## Credits and license
-
-The `vibelabdng/` subtree is a fork of DNGLab, originally created in 2021 by
-Daniel Vogelbacher and released under the GNU Lesser General Public License
-v2.1. The fork keeps the original `LICENSE` and `AUTHORS` files intact. DNGLab
-credits these contributors:
-
-- Alfred Gutierrez (BMFF box parsing from mp4-rust)
-- Andrew Baldwin (lossless JPEG-92 compression)
-- Pedro Corte-Real (rawloader rust library)
-- Alexey Danilchenko and Alex Tutubalin / LibRaw LLC (crx decoder from libraw)
-
-The original code in this repository (the Go service, the Lua plugin, and the
-docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.
-
 ## Container image
 
 The image is built automatically and published to GitHub Container Registry on
@@ -228,3 +213,18 @@ Possible later work, in rough order:
 ## Status
 
 Early, unfinished, and shared as-is under free and open source licenses.
+
+## Credits and license
+
+The `vibelabdng/` subtree is a fork of DNGLab, originally created in 2021 by
+Daniel Vogelbacher and released under the GNU Lesser General Public License
+v2.1. The fork keeps the original `LICENSE` and `AUTHORS` files intact. DNGLab
+credits these contributors:
+
+- Alfred Gutierrez (BMFF box parsing from mp4-rust)
+- Andrew Baldwin (lossless JPEG-92 compression)
+- Pedro Corte-Real (rawloader rust library)
+- Alexey Danilchenko and Alex Tutubalin / LibRaw LLC (crx decoder from libraw)
+
+The original code in this repository (the Go service, the Lua plugin, and the
+docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.
