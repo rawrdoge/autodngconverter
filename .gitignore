@@ -23,8 +23,8 @@ dnglab/
 # CI log dumps
 logs_*/
 
-# Local Cline memory bank (not project source)
-MEMORY.md
+# Local Cline memory bank (not project source, never pushed to prod)
+memory-bank/
 
 # Personal test photo (PII) - never commit
 DSCN6496.NRW

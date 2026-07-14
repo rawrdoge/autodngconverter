@@ -148,7 +148,9 @@ REST API (listening on `PORT`):
 - `GET /api/v1/imports/hash/{sha256}` — find a record by source or output hash.
 - `POST /api/v1/imports/{sequence}/reconvert` — queue a re-conversion.
 - `GET /api/v1/stats` — conversion counts and failure rates.
-- `GET /api/v1/imports/by-path/preview-updated` — notify endpoint the Darktable plugin calls after a preview re-embed (updates the stored `output_hash`).
+- `GET /api/v1/alerts` — recent alert rows.
+- `POST /api/v1/imports/by-path/preview-updated` — notify endpoint the Darktable plugin calls after a preview re-embed (updates the stored `output_hash`).
+- `GET /api/v1/imports/by-source?path=<source RAW path>` — resolve a source RAW path to its DNG output path (used by the plugin's export-hook).
 - `GET /health` — liveness/readiness probe.
 
 Darktable plugin (`betterembeds.lua`):
@@ -160,12 +162,31 @@ multi-resolution Adobe preview. After a successful embed the plugin POSTs to
 the API so the stored `output_hash` stays correct and the corruption monitor
 does not false-positive.
 
-Set these in the Darktable environment so the plugin can reach the API:
+### Pointing the plugin at the API
 
+The API base URL and optional token are configured at the **top of the script
+file** — no environment variables are required. Open `betterembeds.lua` and
+edit the `USER CONFIG` block:
+
+```lua
+-- USER CONFIG
+local RAWIMPORT_API_URL = "http://localhost:8080"   -- base URL, NO trailing slash, NO "/api/v1"
+local API_TOKEN         = ""                        -- optional; must match the server's API_TOKEN
 ```
-RAWIMPORT_API_URL=http://localhost:8080
-API_TOKEN=            # optional; enables bearer auth on the notify endpoint
-```
+
+- `RAWIMPORT_API_URL` is the base URL of the API (e.g. `http://192.168.1.50:8080`
+  when the service runs on your NAS). Do **not** include a trailing slash or the
+  `/api/v1` prefix — the plugin appends the path itself.
+- `API_TOKEN` is only needed if the server was started with `API_TOKEN` set. If
+  the server runs with no token (the default), leave this as `""`.
+
+If you prefer environment variables, leave both constants as `""` and the
+plugin falls back to `RAWIMPORT_API_URL` / `API_TOKEN` from the process that
+launched Darktable. The in-script constant always wins when set.
+
+After editing, restart Darktable. A successful re-embed prints
+`Notified API: preview hash updated`; a `WARN: API notify failed (...)` means
+the URL is unreachable or the token does not match.
 
 ## Building without Docker
 

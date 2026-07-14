@@ -34,6 +34,29 @@ local script_data = {
   restart = function() end
 }
 
+-- ===========================================================================
+-- USER CONFIG -- edit these two values to point the plugin at your RawImport API.
+-- No environment variables required: anyone can open this script in a text
+-- editor and change them. If a value is left as "" the plugin falls back to the
+-- matching environment variable (RAWIMPORT_API_URL / API_TOKEN) instead.
+--   RAWIMPORT_API_URL : base URL of the API. NO trailing slash, NO "/api/v1".
+--                      e.g. "http://localhost:8080" or "http://192.168.1.50:8080"
+--   API_TOKEN         : optional Bearer token. Must match the server's API_TOKEN,
+--                      or "" when the server runs with no API_TOKEN set.
+-- ===========================================================================
+local RAWIMPORT_API_URL = "http://localhost:8080"
+local API_TOKEN         = ""
+
+-- Resolve the API base/token: script constant wins, env var is the fallback.
+local function api_base_url()
+  local v = (RAWIMPORT_API_URL ~= "" and RAWIMPORT_API_URL) or os.getenv("RAWIMPORT_API_URL") or ""
+  return v
+end
+local function api_token()
+  local v = (API_TOKEN ~= "" and API_TOKEN) or os.getenv("API_TOKEN") or ""
+  return v
+end
+
 -- Preferences
 pcall(function()
   dt.preferences.register("embed_preview_hud", "exiftool_path", "string",
@@ -371,12 +394,12 @@ end
 -- ---------------------------------------------------------------------------
 -- Notify the RawImport API that a preview was re-embedded (PRD Q8).
 -- Updates the DB output_hash so the corruption monitor doesn't false-positive.
--- Reads RAWIMPORT_API_URL (and optional API_TOKEN) from the environment.
+-- URL/token come from the USER CONFIG constants (env var fallback via api_base_url/api_token).
 -- ---------------------------------------------------------------------------
 local function notify_preview_updated(dng, worker, w, h, q)
-  local base = os.getenv("RAWIMPORT_API_URL")
+  local base = api_base_url()
   if not base or base == "" then return end
-  local token = os.getenv("API_TOKEN") or ""
+  local token = api_token()
   local body = string.format(
     '{"output_path":"%s","worker":"%s","preview_width":%d,"preview_height":%d,"preview_quality":%d}',
     dng, worker, w or 0, h or 0, q or 0)
@@ -398,11 +421,12 @@ end
 -- ---------------------------------------------------------------------------
 -- Resolve the matching DNG for a source RAW via the RawImport API.
 -- Returns the DNG output_path (string) or nil. Uses GET /api/v1/imports/by-source.
+-- URL/token come from the USER CONFIG constants (env var fallback via api_base_url/api_token).
 -- ---------------------------------------------------------------------------
 local function resolve_dng_via_api(source_path)
-  local base = os.getenv("RAWIMPORT_API_URL")
+  local base = api_base_url()
   if not base or base == "" then return nil end
-  local token = os.getenv("API_TOKEN") or ""
+  local token = api_token()
   local esc = source_path:gsub('"', '\\"')
   local auth_hdr = (token ~= "") and (' -H "Authorization: Bearer ' .. token .. '"') or ""
   local cmd = string.format('curl -s %s "%s/api/v1/imports/by-source?path=%s"',
