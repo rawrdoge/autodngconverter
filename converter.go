@@ -51,23 +51,17 @@ func (e *DnglabEngine) Available() bool {
 }
 
 func (e *DnglabEngine) Convert(ctx context.Context, src, dst string, s ConversionSettings) error {
+	// dnglab `convert` CLI (vibelabdng fork) accepts positional INPUT/OUTPUT
+	// and a limited flag set. The preview size, DNG version (1.4), and JPEG
+	// quality (92) are already the tool's defaults, so we only pass the flags
+	// that actually exist on the subcommand. Passing unknown flags (e.g.
+	// --preview-medium, --dng-version, --jpeg-quality, --compress, --linear,
+	// --seed) makes clap abort the whole conversion.
 	args := []string{
 		"convert",
-		"--input", src,
-		"--output", dst,
-		"--preview-medium", "1024x1024",
-		"--preview-full", "4000x3000",
-		"--dng-version", normalizeVersion(s.Version),
-		"--jpeg-quality", "92",
-	}
-	if s.Compression != "" {
-		args = append(args, "--compress")
-	}
-	if s.Linear != "" {
-		args = append(args, "--linear")
-	}
-	if s.Seed != "" {
-		args = append(args, "--seed", s.Seed)
+		src,
+		dst,
+		"-c", normalizeCompression(s.Compression),
 	}
 	if e.KeepMtime {
 		args = append(args, "--keep-mtime", "true")
@@ -79,6 +73,18 @@ func (e *DnglabEngine) Convert(ctx context.Context, src, dst string, s Conversio
 		return fmt.Errorf("dnglab: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// normalizeCompression maps the API compression flag to a dnglab value.
+// Empty/"true"/"-c" -> lossless (the default); anything else is passed
+// through verbatim (e.g. "uncompressed").
+func normalizeCompression(c string) string {
+	switch strings.TrimSpace(c) {
+	case "", "-c", "true", "lossless":
+		return "lossless"
+	default:
+		return c
+	}
 }
 
 // AdobeEngine invokes Wine + Adobe DNG Converter (opt-in, PRD §4.2.2).

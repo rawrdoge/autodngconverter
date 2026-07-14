@@ -19,8 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl exiftool \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
+
 COPY --from=dnglab /build/target/release/dnglab /usr/local/bin/dnglab
 COPY --from=gobuild /out/rawimport-pipeline /usr/local/bin/rawimport-pipeline
+# SQL migrations are applied at startup by the binary (Migrate("migrations")).
+# They must be present in the working directory of the running container.
+COPY migrations ./migrations/
 
 VOLUME ["/watch", "/output", "/archive", "/db"]
 ENV WATCH_DIR=/watch \
