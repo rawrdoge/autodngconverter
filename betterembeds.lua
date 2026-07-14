@@ -7,6 +7,26 @@ Darktable 5.6 / Lua API 9.7.0 compatible.
 
 local dt = require "darktable"
 
+-- Official compliance: declare the Lua API version range we support and bail
+-- out cleanly on incompatible Darktable builds (mirrors dtutils.check_* pattern).
+local REQUIRED_API = "9.0.0"
+local function api_ok()
+  local ok, ver = pcall(function() return dt.configuration.api_version end)
+  if not ok or not ver then return true end -- unknown build: best-effort
+  local function parts(v) local a,b,c=string.match(v,"^(%d+)%.(%d+)%.(%d+)") return tonumber(a),tonumber(b),tonumber(c) end
+  local maj,min,pat = parts(tostring(ver))
+  local rmaj,rmin,rpat = parts(REQUIRED_API)
+  if not maj then return true end
+  if maj ~= rmaj then return maj > rmaj end
+  if min ~= rmin then return min > rmin end
+  return pat >= rpat
+end
+
+if not api_ok() then
+  dt.print_error("embed_preview_hud: requires Darktable Lua API >= " .. REQUIRED_API)
+  return
+end
+
 local script_data = {
   name = "Embed Preview",
   module = "embed_preview_hud",
@@ -43,6 +63,16 @@ end)
 pcall(function()
   dt.preferences.register("embed_preview_hud", "auto_reeembed_on_export", "bool",
     "Auto re-embed on export", "Re-embed exported JPEG into the matching DNG after any Darktable export", false)
+end)
+
+pcall(function()
+  dt.preferences.register("embed_preview_hud", "raw_library_root", "string",
+    "RAW library root", "Filmroll path prefix of your camera-RAW library (e.g. /mnt/nas/photos/watch). Empty = auto by extension.", "")
+end)
+
+pcall(function()
+  dt.preferences.register("embed_preview_hud", "dng_library_root", "string",
+    "DNG library root", "Filmroll path prefix of your DNG library (e.g. /mnt/nas/photos/output). Empty = auto by extension.", "")
 end)
 
 -- ---------------------------------------------------------------------------
@@ -388,9 +418,61 @@ local function resolve_dng_via_api(source_path)
 end
 
 -- ---------------------------------------------------------------------------
--- Export-hook: after Darktable exports an image, if its source is a DNG in the
--- RawImport library, re-embed the just-exported JPEG into that DNG. This is the
--- "share my edit back into the DNG" flow (Immich extracts embedded JPEGs).
+-- Library awareness: decide whether the image being edited lives in the
+-- camera-RAW library (needs raw->DNG resolution) or the DNG library (the DNG
+-- itself is the target, so skip raw routing). Detection uses the filmroll
+-- path prefix (configured roots) and falls back to file extension.
+-- Returns "raw" | "dng" | "unknown".
+-- ---------------------------------------------------------------------------
+local function detect_library_mode(image)
+  local raw_root = dt.preferences.read("embed_preview_hud", "raw_library_root", "string") or ""
+  local dng_root = dt.preferences.read("embed_preview_hud", "dng_library_root", "string") or ""
+  local film_path = ""
+  pcall(function() film_path = image.film and image.film.path or image.path end)
+  if film_path == "" then film_path = image.path end
+
+  local lower = film_path:lower()
+  if dng_root ~= "" and lower:sub(1, #dng_root:lower()) == dng_root:lower() then
+    return "dng"
+  end
+  if raw_root ~= "" and lower:sub(1, #raw_root:lower()) == raw_root:lower() then
+    return "raw"
+  end
+  -- Fallback: by extension of the source image itself.
+  if image.filename:lower():match("%.dng$") then return "dng" end
+  return "raw"
+end
+
+-- ---------------------------------------------------------------------------
+-- Resolve the target DNG for a re-embed given the library mode.
+--  - "dng" mode: the DNG IS the source image (image.path/filename).
+--  - "raw" mode: resolve via the RawImport API (source RAW -> DNG output).
+-- Returns the DNG path or nil (+ a reason string).
+-- ---------------------------------------------------------------------------
+local function resolve_target_dng(image, mode)
+  if mode == "dng" then
+    local dng = image.path .. "/" .. image.filename
+    if not file_writable(dng) then return nil, "DNG not writable: " .. dng end
+    return dng, nil
+  end
+  -- raw mode: ask the API to map source RAW -> DNG output path.
+  local source_path = image.path .. "/" .. image.filename
+  local dng = resolve_dng_via_api(source_path)
+  if not dng or dng == "" then
+    return nil, "no matching DNG for " .. image.filename
+  end
+  if not file_writable(dng) then
+    return nil, "DNG not writable: " .. dng
+  end
+  return dng, nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Export-hook: after Darktable exports an image, re-embed the just-exported
+-- JPEG into the matching DNG. Library-aware: if the image lives in the DNG
+-- library the DNG is the target directly; if it lives in the RAW library we
+-- resolve the DNG via the RawImport API. This is the "share my edit back into
+-- the DNG" flow (Immich extracts embedded JPEGs).
 -- Gated by the `auto_reeembed_on_export` preference (default off).
 -- ---------------------------------------------------------------------------
 local function on_post_export(image, session, exported_path)
@@ -399,15 +481,10 @@ local function on_post_export(image, session, exported_path)
   if not exported_path or exported_path == "" then return end
   if not exported_path:lower():match("%.jpe?g$") then return end
 
-  -- The source RAW path is what the API indexed (image.path + filename).
-  local source_path = image.path .. "/" .. image.filename
-  local dng = resolve_dng_via_api(source_path)
-  if not dng or dng == "" then
-    dt.print("Auto re-embed: no matching DNG for " .. image.filename)
-    return
-  end
-  if not file_writable(dng) then
-    dt.print("Auto re-embed: DNG not writable: " .. dng)
+  local mode = detect_library_mode(image)
+  local dng, reason = resolve_target_dng(image, mode)
+  if not dng then
+    dt.print("Auto re-embed: " .. (reason or "no target DNG"))
     return
   end
 
@@ -450,7 +527,7 @@ local function on_post_export(image, session, exported_path)
     if valid then
       pcall(function() os.remove(dng .. "_original") end)
       notify_preview_updated(dng, worker, s.width, s.height, s.quality)
-      dt.print("Auto re-embedded edit into " .. dng .. " (" .. worker_label .. ")")
+      dt.print("Auto re-embedded edit into " .. dng .. " (" .. worker_label .. ", " .. mode .. " mode)")
     else
       local backup = dng .. "_original"
       local bf = io.open(backup, "rb")
@@ -791,8 +868,16 @@ local function install()
   -- Register the export-hook so a Darktable export can auto re-embed the
   -- edited JPEG back into the matching DNG (Immich "share thumbnail" flow).
   -- Gated by the `auto_reeembed_on_export` preference (default off).
+  -- The handler is wrapped in pcall so a failure can never abort the user's
+  -- export or crash Darktable (official best practice for event callbacks).
   pcall(function()
-    dt.register_event("post-export-image", on_post_export)
+    dt.register_event("post-export-image", function(image, session, exported_path)
+      local ok, err = pcall(on_post_export, image, session, exported_path)
+      if not ok then
+        dt.print_error("embed_preview_hud: re-embed hook error: " .. tostring(err))
+        print("[embed_preview_hud] re-embed hook error: " .. tostring(err))
+      end
+    end)
     print("[embed_preview_hud] post-export-image hook registered.")
   end)
 
