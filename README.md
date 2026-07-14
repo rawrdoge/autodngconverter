@@ -134,6 +134,13 @@ parentheses.
 | `PORT` | Port the REST API listens on. | `8080` |
 | `API_TOKEN` | Optional bearer token. If set, the preview-updated notify endpoint requires `Authorization: Bearer <API_TOKEN>`. | (empty) |
 | `ALERT_PUSH_URL` | Optional URL to push alert webhooks to. | (empty) |
+| `GEN_THUMB_JPEG` | Write a standalone `IMG_{n}.thumb.jpg` sidecar next to each DNG in `/output`. **Off by default** so the output library contains only DNGs. | `false` |
+| `DEF_COMPRESSION` | Default RAW compression for new imports: `lossless` \| `uncompressed`. | `lossless` |
+| `DEF_DNG_VERSION` | Default DNG spec version for new imports. | `1.4` |
+| `DEF_PREVIEW_MEDIUM` | Default medium preview size `WxH`. | `1024x1024` |
+| `DEF_PREVIEW_FULL` | Default full preview size `WxH`. | `4000x3000` |
+| `DEF_JPEG_QUALITY` | Default JPEG preview quality (0-100). | `92` |
+| `DEF_LINEAR` | Default linear (demosaiced) DNG flag. | `false` |
 
 ## Commands and endpoints
 
@@ -146,7 +153,12 @@ REST API (listening on `PORT`):
 - `GET /api/v1/imports?page=1&limit=50&status=completed` — list imports.
 - `GET /api/v1/imports/{sequence}` — get one record by `IMG_{n}`.
 - `GET /api/v1/imports/hash/{sha256}` — find a record by source or output hash.
-- `POST /api/v1/imports/{sequence}/reconvert` — queue a re-conversion.
+- `POST /api/v1/imports/{sequence}/reconvert` — queue a re-conversion. Body:
+  `{ "conversion_settings": { "compression": "lossless", "version": "1.4",
+  "preview_medium": "1024x1024", "preview_full": "4000x3000", "jpeg_quality": 92,
+  "linear": false, "seed": "<optional>" }, "reason": "..." }`. These settings are
+  forwarded verbatim to the dnglab `convert` subcommand; omitted fields fall back
+  to the `DEF_*` env defaults.
 - `GET /api/v1/stats` — conversion counts and failure rates.
 - `GET /api/v1/alerts` — recent alert rows.
 - `POST /api/v1/imports/by-path/preview-updated` — notify endpoint the Darktable plugin calls after a preview re-embed (updates the stored `output_hash`).

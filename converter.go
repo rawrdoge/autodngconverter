@@ -10,11 +10,13 @@ import (
 
 // ConversionSettings maps the re-conversion API body (PRD §7.2) to engine flags.
 type ConversionSettings struct {
-	Compression string `json:"compression"` // "-c" or ""
-	Preview     string `json:"preview"`     // "-p1" etc (selects preview dims)
-	Version     string `json:"version"`     // "-dng1.4" -> "1.4"
-	Linear      string `json:"linear"`      // "" or set
-	Seed        string `json:"seed"`        // determinism seed
+	Compression    string `json:"compression"`      // "lossless" | "uncompressed"
+	PreviewMedium  string `json:"preview_medium"`   // "1024x1024"
+	PreviewFull    string `json:"preview_full"`     // "4000x3000"
+	Version        string `json:"version"`          // "1.4" | "1.6"
+	JpegQuality    int    `json:"jpeg_quality"`     // 0-100
+	Linear         bool   `json:"linear"`           // linear (demosaiced) DNG
+	Seed           string `json:"seed"`             // determinism seed
 }
 
 // ConverterEngine is the pluggable conversion backend (PRD §4.2.2, Q1).
@@ -52,16 +54,32 @@ func (e *DnglabEngine) Available() bool {
 
 func (e *DnglabEngine) Convert(ctx context.Context, src, dst string, s ConversionSettings) error {
 	// dnglab `convert` CLI (vibelabdng fork) accepts positional INPUT/OUTPUT
-	// and a limited flag set. The preview size, DNG version (1.4), and JPEG
-	// quality (92) are already the tool's defaults, so we only pass the flags
-	// that actually exist on the subcommand. Passing unknown flags (e.g.
-	// --preview-medium, --dng-version, --jpeg-quality, --compress, --linear,
-	// --seed) makes clap abort the whole conversion.
+	// plus the real output flags. These are all registered on the `convert`
+	// subcommand (app.rs) and consumed by convert.rs, so the settings passed
+	// here actually reach the rendered DNG.
 	args := []string{
 		"convert",
 		src,
 		dst,
 		"-c", normalizeCompression(s.Compression),
+	}
+	if v := normalizeVersion(s.Version); v != "" {
+		args = append(args, "--dng-version", v)
+	}
+	if s.PreviewMedium != "" {
+		args = append(args, "--preview-medium", s.PreviewMedium)
+	}
+	if s.PreviewFull != "" {
+		args = append(args, "--preview-full", s.PreviewFull)
+	}
+	if s.JpegQuality > 0 {
+		args = append(args, "--jpeg-quality", fmt.Sprintf("%d", s.JpegQuality))
+	}
+	if s.Linear {
+		args = append(args, "--linear", "true")
+	}
+	if s.Seed != "" {
+		args = append(args, "--seed", s.Seed)
 	}
 	if e.KeepMtime {
 		args = append(args, "--keep-mtime", "true")
@@ -76,7 +94,7 @@ func (e *DnglabEngine) Convert(ctx context.Context, src, dst string, s Conversio
 }
 
 // normalizeCompression maps the API compression flag to a dnglab value.
-// Empty/"true"/"-c" -> lossless (the default); anything else is passed
+// Empty/"true"/"lossless" -> lossless (the default); anything else is passed
 // through verbatim (e.g. "uncompressed").
 func normalizeCompression(c string) string {
 	switch strings.TrimSpace(c) {
@@ -107,8 +125,14 @@ func (e *AdobeEngine) Convert(ctx context.Context, src, dst string, s Conversion
 	if i := strings.LastIndex(dstDir, "/"); i >= 0 {
 		dstDir = dstDir[:i]
 	}
+	// Map our normalized settings onto Adobe DNG Converter flags.
+	comp := "-c"
+	if strings.EqualFold(normalizeCompression(s.Compression), "uncompressed") {
+		comp = "-u"
+	}
+	ver := "-dng" + normalizeVersion(s.Version)
 	cmd := exec.CommandContext(ctx, "wine", e.Exe,
-		s.Compression, s.Preview, normalizeVersion(s.Version), "-d", dstDir, src)
+		comp, ver, "-d", dstDir, src)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("adobedng: %w: %s", err, strings.TrimSpace(string(out)))

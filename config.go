@@ -30,6 +30,14 @@ type Config struct {
 	AlertPushURL string
 	Port         string
 	APIToken     string // optional bearer token for notify endpoints (PRD Q8)
+	GenThumbJPEG bool   // write a standalone IMG_n.thumb.jpg sidecar to /output (default false)
+	// Default conversion settings applied to every new import (reconversions can override).
+	DefCompression   string
+	DefPreviewMedium string
+	DefPreviewFull   string
+	DefVersion       string
+	DefJpegQuality   int
+	DefLinear        bool
 }
 
 func env(key, def string) string {
@@ -73,5 +81,22 @@ func LoadConfig() Config {
 		AlertPushURL: env("ALERT_PUSH_URL", ""),
 		Port:         env("PORT", "8080"),
 		APIToken:     env("API_TOKEN", ""),
+		GenThumbJPEG: envBool("GEN_THUMB_JPEG", false),
+		DefCompression:   env("DEF_COMPRESSION", "lossless"),
+		DefPreviewMedium: env("DEF_PREVIEW_MEDIUM", "1024x1024"),
+		DefPreviewFull:   env("DEF_PREVIEW_FULL", "4000x3000"),
+		DefVersion:       env("DEF_DNG_VERSION", "1.4"),
+		DefJpegQuality:   envInt("DEF_JPEG_QUALITY", 92),
+		DefLinear:        envBool("DEF_LINEAR", false),
 	}
+}
+
+func envBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			return b
+		}
+	}
+	return def
 }

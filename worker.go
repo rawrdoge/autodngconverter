@@ -149,7 +149,7 @@ func (w *Worker) processFile(ctx context.Context, srcPath string) {
 	// 9. convert
 	cctx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
-	settings := ConversionSettings{Compression: "-c", Version: "-dng1.4", Seed: srcHash[:16]}
+	settings := w.defaultSettings(srcHash[:16])
 	if err := w.engine.Convert(cctx, srcPath, dstDNG, settings); err != nil {
 		log.Printf("convert failed %s: %v", srcPath, err)
 		w.store.InsertAlert("error", "conversion_failed", fmt.Sprintf("%s: %v", seqName, err), seqName)
@@ -161,13 +161,16 @@ func (w *Worker) processFile(ctx context.Context, srcPath string) {
 		log.Printf("output hash error: %v", err)
 		return
 	}
-	// 11. thumbnail
-	usedFallback, terr := extractThumbnail(dstDNG, thumb, w.cfg.ExifTool)
-	if terr != nil {
-		log.Printf("thumbnail extract failed %s: %v", seqName, terr)
-		w.store.InsertAlert("warning", "thumbnail_missing", "no preview extracted: "+seqName, seqName)
-	} else if usedFallback {
-		w.store.InsertAlert("warning", "thumbnail_fallback", "SubIFD1 missing, used SubIFD2 for "+seqName, seqName)
+	// 11. thumbnail (standalone sidecar JPEG). Disabled by default so the
+	// /output library only contains DNGs; set GEN_THUMB_JPEG=true to enable.
+	if w.cfg.GenThumbJPEG {
+		usedFallback, terr := extractThumbnail(dstDNG, thumb, w.cfg.ExifTool)
+		if terr != nil {
+			log.Printf("thumbnail extract failed %s: %v", seqName, terr)
+			w.store.InsertAlert("warning", "thumbnail_missing", "no preview extracted: "+seqName, seqName)
+		} else if usedFallback {
+			w.store.InsertAlert("warning", "thumbnail_fallback", "SubIFD1 missing, used SubIFD2 for "+seqName, seqName)
+		}
 	}
 	// 12. insert
 	rec := ImportRecord{
@@ -212,6 +215,20 @@ func (w *Worker) ProcessReconversions(ctx context.Context) {
 	}
 }
 
+// defaultSettings builds the ConversionSettings applied to every new import,
+// sourced from the DEF_* environment variables (PRD §4.2.2).
+func (w *Worker) defaultSettings(seed string) ConversionSettings {
+	return ConversionSettings{
+		Compression:   w.cfg.DefCompression,
+		PreviewMedium: w.cfg.DefPreviewMedium,
+		PreviewFull:   w.cfg.DefPreviewFull,
+		Version:       w.cfg.DefVersion,
+		JpegQuality:   w.cfg.DefJpegQuality,
+		Linear:        w.cfg.DefLinear,
+		Seed:          seed,
+	}
+}
+
 func (w *Worker) runReconversion(ctx context.Context, j ReconversionJob) {
 	// b. verify source hash still matches. The stored source_path may point
 	// at the original watch location; after archival the file lives under
@@ -237,7 +254,7 @@ func (w *Worker) runReconversion(ctx context.Context, j ReconversionJob) {
 	defer cancel()
 	var s ConversionSettings
 	if err := jsonUnmarshal([]byte(j.Settings), &s); err != nil {
-		s = ConversionSettings{Compression: "-c", Version: "-dng1.4", Seed: j.PrevHash[:16]}
+		s = w.defaultSettings(j.PrevHash[:16])
 	}
 	if err := w.engine.Convert(cctx, srcPath, dstDNG, s); err != nil {
 		log.Printf("reconv failed %s: %v", j.Sequence, err)
