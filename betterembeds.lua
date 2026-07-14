@@ -32,7 +32,7 @@ end)
 
 pcall(function()
   dt.preferences.register("embed_preview_hud", "worker", "string",
-    "Re-embed worker", "exiftool|dnglab|dng_sdk", "exiftool")
+    "Re-embed worker", "exiftool|dnglab|dng_sdk", "dnglab")
 end)
 
 pcall(function()
@@ -411,17 +411,25 @@ local function on_post_export(image, session, exported_path)
     return
   end
 
-  local worker = dt.preferences.read("embed_preview_hud", "worker", "string") or "exiftool"
-  local tool, worker_label
-  if worker == "dnglab" then
-    if not dnglab_available() then return end
-    tool = get_tool("dnglab"); worker_label = "dnglab"
-  elseif worker == "dng_sdk" then
-    if not dng_sdk_available() then return end
-    tool = get_tool("dng_sdk"); worker_label = "DNG SDK"
+  -- Prefer dnglab (upstream multi-res SubIFD1/SubIFD2 re-embed). Fall back to
+  -- the configured worker only if dnglab is unavailable.
+  local configured = dt.preferences.read("embed_preview_hud", "worker", "string") or "dnglab"
+  local tool, worker_label, worker
+  if dnglab_available() then
+    worker = "dnglab"
+    tool = get_tool("dnglab")
+    worker_label = "dnglab"
+  elseif configured == "dng_sdk" and dng_sdk_available() then
+    worker = "dng_sdk"
+    tool = get_tool("dng_sdk")
+    worker_label = "DNG SDK"
+  elseif tool_exists(get_tool("exiftool")) then
+    worker = "exiftool"
+    tool = get_tool("exiftool")
+    worker_label = "ExifTool"
   else
-    if not tool_exists(get_tool("exiftool")) then return end
-    tool = get_tool("exiftool"); worker_label = "ExifTool"
+    dt.print("Auto re-embed: no re-embed worker available (need dnglab/exiftool/DNG SDK)")
+    return
   end
 
   local is_adobe = (dt.preferences.read("embed_preview_hud", "embed_mode", "string") or "adobe") == "adobe"
@@ -464,31 +472,26 @@ local function do_embed()
     return
   end
 
-  local worker = dt.preferences.read("embed_preview_hud", "worker", "string") or "exiftool"
+  local configured = dt.preferences.read("embed_preview_hud", "worker", "string") or "dnglab"
 
-  -- Resolve the worker + its tool path
-  local tool, worker_label
-  if worker == "dnglab" then
-    if not dnglab_available() then
-      if result_lbl then result_lbl.label = "Error: dnglab not found (set dnglab_path)" end
-      return
-    end
+  -- Prefer dnglab (upstream multi-res SubIFD1/SubIFD2 re-embed). Fall back to
+  -- the configured worker only if dnglab is unavailable.
+  local tool, worker_label, worker
+  if dnglab_available() then
+    worker = "dnglab"
     tool = get_tool("dnglab")
     worker_label = "dnglab"
-  elseif worker == "dng_sdk" then
-    if not dng_sdk_available() then
-      if result_lbl then result_lbl.label = "Error: DNG SDK not found (set dng_sdk_path)" end
-      return
-    end
+  elseif configured == "dng_sdk" and dng_sdk_available() then
+    worker = "dng_sdk"
     tool = get_tool("dng_sdk")
     worker_label = "DNG SDK"
-  else
-    if not tool_exists(get_tool("exiftool")) then
-      if result_lbl then result_lbl.label = "Error: ExifTool not found" end
-      return
-    end
+  elseif tool_exists(get_tool("exiftool")) then
+    worker = "exiftool"
     tool = get_tool("exiftool")
     worker_label = "ExifTool"
+  else
+    if result_lbl then result_lbl.label = "Error: no re-embed worker available (need dnglab/exiftool/DNG SDK)" end
+    return
   end
 
   local dngs = {}
