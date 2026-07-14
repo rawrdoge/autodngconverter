@@ -52,6 +52,9 @@ func (s *APIServer) routes() {
 	// Notify endpoints (PRD Q8): called by the Darktable Lua script after a
 	// preview re-embed so the DB output_hash stays in sync (no false corruption).
 	s.echo.POST("/api/v1/imports/by-path/preview-updated", s.previewUpdated, s.notifyAuth)
+	// Resolve a source RAW path -> its DNG output path (used by the Darktable
+	// export-hook to find which DNG should receive a re-embedded preview).
+	s.echo.GET("/api/v1/imports/by-source", s.bySource)
 }
 
 func (s *APIServer) health(c echo.Context) error {
@@ -193,4 +196,19 @@ func (s *APIServer) previewUpdated(c echo.Context) error {
 		"new_output_hash":  newHash,
 		"last_preview_edit_at": "now",
 	})
+}
+
+// bySource resolves a source RAW path to its import record so the Darktable
+// export-hook can locate the DNG that should receive a re-embedded preview.
+// Query: ?path=<source RAW path>. Returns the full record (incl. output_path).
+func (s *APIServer) bySource(c echo.Context) error {
+	path := c.QueryParam("path")
+	if path == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "path required"})
+	}
+	rec, err := s.store.GetImportBySourcePath(path)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no import for source path"})
+	}
+	return c.JSON(http.StatusOK, rec)
 }

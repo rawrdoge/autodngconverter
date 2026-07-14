@@ -403,3 +403,22 @@ func (s *Store) GetImportByOutputPath(path string) (*ImportRecord, error) {
 	rec.SequenceName = fmt.Sprintf("IMG_%d", sid)
 	return &rec, nil
 }
+
+// GetImportBySourcePath resolves a source RAW path to its import record (used by
+// the Darktable Lua export-hook to find the DNG that should receive a re-embedded
+// preview). Matches on the stored source_path (the archived RAW location).
+func (s *Store) GetImportBySourcePath(path string) (*ImportRecord, error) {
+	var rec ImportRecord
+	var sid int64
+	err := s.db.QueryRow(`SELECT id, sequence_id, source_path, source_hash, output_path, output_hash,
+		camera_model, capture_date, capture_time, date_source, folder_schema, status, created_at, completed_at
+		FROM imports WHERE source_path = ? LIMIT 1`, path).
+		Scan(&rec.ID, &sid, &rec.SourcePath, &rec.SourceHash, &rec.OutputPath, &rec.OutputHash,
+			&rec.CameraModel, &rec.CaptureDate, &rec.CaptureTime, &rec.DateSource, &rec.FolderSchema,
+			&rec.Status, &rec.CreatedAt, &rec.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+	rec.SequenceName = fmt.Sprintf("IMG_%d", sid)
+	return &rec, nil
+}

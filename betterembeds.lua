@@ -40,6 +40,11 @@ pcall(function()
     "Embed mode", "adobe|preserve|minimal", "adobe")
 end)
 
+pcall(function()
+  dt.preferences.register("embed_preview_hud", "auto_reeembed_on_export", "bool",
+    "Auto re-embed on export", "Re-embed exported JPEG into the matching DNG after any Darktable export", false)
+end)
+
 -- ---------------------------------------------------------------------------
 -- Read export module settings
 -- ---------------------------------------------------------------------------
@@ -357,6 +362,95 @@ local function notify_preview_updated(dng, worker, w, h, q)
     else
       dt.print("WARN: API notify failed (" .. tostring(code) .. ")")
     end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Resolve the matching DNG for a source RAW via the RawImport API.
+-- Returns the DNG output_path (string) or nil. Uses GET /api/v1/imports/by-source.
+-- ---------------------------------------------------------------------------
+local function resolve_dng_via_api(source_path)
+  local base = os.getenv("RAWIMPORT_API_URL")
+  if not base or base == "" then return nil end
+  local token = os.getenv("API_TOKEN") or ""
+  local esc = source_path:gsub('"', '\\"')
+  local auth_hdr = (token ~= "") and (' -H "Authorization: Bearer ' .. token .. '"') or ""
+  local cmd = string.format('curl -s %s "%s/api/v1/imports/by-source?path=%s"',
+    auth_hdr, base, esc:gsub(" ", "%%20"))
+  local pipe = io.popen(cmd)
+  if not pipe then return nil end
+  local out = pipe:read("*a")
+  pipe:close()
+  if not out or out == "" then return nil end
+  -- Extract output_path from the JSON (lightweight parse, no dependency).
+  local op = out:match('"output_path"%s*:%s*"([^"]+)"')
+  return op
+end
+
+-- ---------------------------------------------------------------------------
+-- Export-hook: after Darktable exports an image, if its source is a DNG in the
+-- RawImport library, re-embed the just-exported JPEG into that DNG. This is the
+-- "share my edit back into the DNG" flow (Immich extracts embedded JPEGs).
+-- Gated by the `auto_reeembed_on_export` preference (default off).
+-- ---------------------------------------------------------------------------
+local function on_post_export(image, session, exported_path)
+  local enabled = dt.preferences.read("embed_preview_hud", "auto_reeembed_on_export", "bool")
+  if not enabled then return end
+  if not exported_path or exported_path == "" then return end
+  if not exported_path:lower():match("%.jpe?g$") then return end
+
+  -- The source RAW path is what the API indexed (image.path + filename).
+  local source_path = image.path .. "/" .. image.filename
+  local dng = resolve_dng_via_api(source_path)
+  if not dng or dng == "" then
+    dt.print("Auto re-embed: no matching DNG for " .. image.filename)
+    return
+  end
+  if not file_writable(dng) then
+    dt.print("Auto re-embed: DNG not writable: " .. dng)
+    return
+  end
+
+  local worker = dt.preferences.read("embed_preview_hud", "worker", "string") or "exiftool"
+  local tool, worker_label
+  if worker == "dnglab" then
+    if not dnglab_available() then return end
+    tool = get_tool("dnglab"); worker_label = "dnglab"
+  elseif worker == "dng_sdk" then
+    if not dng_sdk_available() then return end
+    tool = get_tool("dng_sdk"); worker_label = "DNG SDK"
+  else
+    if not tool_exists(get_tool("exiftool")) then return end
+    tool = get_tool("exiftool"); worker_label = "ExifTool"
+  end
+
+  local is_adobe = (dt.preferences.read("embed_preview_hud", "embed_mode", "string") or "adobe") == "adobe"
+  local s = read_export_settings()
+
+  local embed_ok
+  if worker == "dnglab" then
+    embed_ok = embed_with_dnglab(dng, exported_path)
+  elseif worker == "dng_sdk" then
+    embed_ok = embed_with_sdk(dng, exported_path, {preview_w = s.width, preview_h = s.height})
+  else
+    embed_ok = embed_with_exiftool(tool, dng, exported_path, is_adobe)
+  end
+
+  if embed_ok then
+    local exif_tool = get_tool("exiftool")
+    local valid = verify_dng(exif_tool, dng)
+    if valid then
+      pcall(function() os.remove(dng .. "_original") end)
+      notify_preview_updated(dng, worker, s.width, s.height, s.quality)
+      dt.print("Auto re-embedded edit into " .. dng .. " (" .. worker_label .. ")")
+    else
+      local backup = dng .. "_original"
+      local bf = io.open(backup, "rb")
+      if bf then bf:close(); os.execute('move /Y "' .. backup .. '" "' .. dng .. '"') end
+      dt.print("WARN: re-embed failed verification, restored backup for " .. dng)
+    end
+  else
+    dt.print("WARN: re-embed failed for " .. dng)
   end
 end
 
@@ -690,6 +784,14 @@ local function install()
     print("[embed_preview_hud] register_lib failed: " .. tostring(reg_err))
     return
   end
+
+  -- Register the export-hook so a Darktable export can auto re-embed the
+  -- edited JPEG back into the matching DNG (Immich "share thumbnail" flow).
+  -- Gated by the `auto_reeembed_on_export` preference (default off).
+  pcall(function()
+    dt.register_event("post-export-image", on_post_export)
+    print("[embed_preview_hud] post-export-image hook registered.")
+  end)
 
   update_status()
   sync_export_settings()
