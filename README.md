@@ -163,6 +163,8 @@ REST API (listening on `PORT`):
 - `GET /api/v1/alerts` — recent alert rows.
 - `POST /api/v1/imports/by-path/preview-updated` — notify endpoint the Darktable plugin calls after a preview re-embed (updates the stored `output_hash`).
 - `GET /api/v1/imports/by-source?path=<source RAW path>` — resolve a source RAW path to its DNG output path (used by the plugin's export-hook).
+- `POST /api/v1/imports/by-source/rotation-updated` — notify endpoint the Darktable plugin calls after a rotation edit. Body: `{ "source_path": "<RAW path>", "orientation": <1-8>, "client_id": "<id>" }`. Rapid intents for the same file are coalesced into a single DNG rewrite (last orientation wins) after a short grace timer.
+- `GET /metrics` — Prometheus-format metrics: `rawimport_files_detected_total`, `rawimport_conversions_completed_total{status="completed|failed"}`, `rawimport_conversion_duration_seconds` (histogram), `rawimport_queue_depth`, `rawimport_db_size_bytes`.
 - `GET /health` — liveness/readiness probe.
 
 Darktable plugin (`betterembeds.lua`):
@@ -245,7 +247,22 @@ Possible later work, in rough order:
 
 ## Status
 
-Early, unfinished, and shared as-is under free and open source licenses.
+**v1.0.0** — first tagged release of the Go service. Core pipeline is
+functional: watcher (poll + 2s debounce + partial-file skip), dnglab
+conversion via vibelabdng, SHA-256 of source and output, global
+monotonic `IMG_{n}` sequence, re-conversion API, preview-updated hash
+sync, thumbnail sidecar (`GEN_THUMB_JPEG`), the REST API, and the
+Darktable Lua re-embed plugin.
+
+**Deferred to v1.0.1** (known core gaps vs the C++ rewrite):
+- Rotation / orientation sync endpoint
+  (`POST /api/v1/imports/by-source/rotation-updated` + coalesced
+  `RotationManager`) — PRD §5, ORCHESTRATION §7.4.
+- Prometheus `/metrics` endpoint (the 5 required series) — PRD §3.6.
+
+Both are in-scope core features and are scheduled for the next iterative
+tag. The service remains a personal tool, shared as-is under free and
+open source licenses.
 
 ## Credits and license
 
