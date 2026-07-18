@@ -10,16 +10,17 @@ import (
 
 // APIServer exposes the REST endpoints (PRD §4.2.6, §7). No auth in v1 (Q7).
 type APIServer struct {
-	store  *Store
-	worker *Worker
-	echo   *echo.Echo
-	token  string // optional bearer token for notify endpoints (PRD Q8)
+	store       *Store
+	worker      *Worker
+	rotationMgr *RotationManager
+	echo        *echo.Echo
+	token       string // optional bearer token for notify endpoints (PRD Q8)
 }
 
-func NewAPIServer(store *Store, worker *Worker, token string) *APIServer {
+func NewAPIServer(store *Store, worker *Worker, rotationMgr *RotationManager, token string) *APIServer {
 	e := echo.New()
 	e.HideBanner = true
-	s := &APIServer{store: store, worker: worker, echo: e, token: token}
+	s := &APIServer{store: store, worker: worker, rotationMgr: rotationMgr, echo: e, token: token}
 	s.routes()
 	return s
 }
@@ -55,6 +56,10 @@ func (s *APIServer) routes() {
 	// Resolve a source RAW path -> its DNG output path (used by the Darktable
 	// export-hook to find which DNG should receive a re-embedded preview).
 	s.echo.GET("/api/v1/imports/by-source", s.bySource)
+	// Rotation / orientation sync (PRD §5, ORCH §7.4). Coalesced by RotationManager.
+	s.echo.POST("/api/v1/imports/by-source/rotation-updated", s.rotationUpdated, s.notifyAuth)
+	// Prometheus metrics (PRD §3.6).
+	s.echo.GET("/metrics", s.metrics)
 }
 
 func (s *APIServer) health(c echo.Context) error {
@@ -211,4 +216,40 @@ func (s *APIServer) bySource(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "no import for source path"})
 	}
 	return c.JSON(http.StatusOK, rec)
+}
+
+// rotationUpdated is the Darktable orientation-sync notify endpoint (PRD §5,
+// ORCH §7.4). Body: { "source_path": "<RAW path>", "orientation": <1-8>,
+// "client_id": "<id>" }. The RotationManager coalesces rapid intents for the
+// same file into a single exiftool rewrite (last orientation wins).
+func (s *APIServer) rotationUpdated(c echo.Context) error {
+	if s.rotationMgr == nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "rotation disabled"})
+	}
+	var body struct {
+		SourcePath string `json:"source_path"`
+		Orientation int    `json:"orientation"`
+		ClientID    string `json:"client_id"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if body.SourcePath == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "source_path required"})
+	}
+	if body.Orientation < 1 || body.Orientation > 8 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "orientation must be 1-8"})
+	}
+	rec, err := s.store.GetImportBySourcePath(body.SourcePath)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no import for source path"})
+	}
+	s.rotationMgr.Queue(rec.ID, rec.OutputPath, body.Orientation, body.ClientID)
+	return c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// metrics exposes Prometheus-format series (PRD §3.6).
+func (s *APIServer) metrics(c echo.Context) error {
+	c.Response().Header().Set(echo.HeaderContentType, "text/plain; version=0.0.4")
+	return c.String(http.StatusOK, renderMetrics())
 }

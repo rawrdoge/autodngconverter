@@ -38,6 +38,10 @@ type Config struct {
 	DefVersion       string
 	DefJpegQuality   int
 	DefLinear        bool
+	// Rotation sync (PRD §5, ORCH §7.4).
+	RotationGraceMs int    // coalescing grace window for spammy rotation intents
+	ImmichURL       string // optional Immich base URL for post-rotation rescan webhook
+	DigikamRescan   bool   // optional digiKam rescan trigger after rotation
 }
 
 func env(key, def string) string {
@@ -88,6 +92,9 @@ func LoadConfig() Config {
 		DefVersion:       env("DEF_DNG_VERSION", "1.4"),
 		DefJpegQuality:   envInt("DEF_JPEG_QUALITY", 92),
 		DefLinear:        envBool("DEF_LINEAR", false),
+		RotationGraceMs:  envInt("ROTATION_GRACE_MS", 1500),
+		ImmichURL:        env("IMMICH_URL", ""),
+		DigikamRescan:    envBool("DIGIKAM_RESCAN", false),
 	}
 }
 

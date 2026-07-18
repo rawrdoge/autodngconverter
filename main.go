@@ -43,7 +43,9 @@ func main() {
 	defer cancel()
 	worker.Start(ctx)
 
-	api := NewAPIServer(store, worker, cfg.APIToken)
+	// Rotation / orientation sync manager (PRD §5, ORCH §7.4).
+	rotationMgr := NewRotationManager(cfg, store)
+	api := NewAPIServer(store, worker, rotationMgr, cfg.APIToken)
 	go func() {
 		addr := ":" + cfg.Port
 		log.Printf("API listening on %s", addr)
@@ -58,6 +60,7 @@ func main() {
 	<-sig
 	log.Println("shutting down...")
 	cancel()
+	rotationMgr.Stop()
 	time.Sleep(500 * time.Millisecond)
 	fmt.Println("done")
 }

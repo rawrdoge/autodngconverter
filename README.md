@@ -247,6 +247,17 @@ Possible later work, in rough order:
 
 ## Status
 
+**v1.0.1** — adds the two core features that were deferred from v1.0.0:
+- **Rotation / orientation sync** (`POST /api/v1/imports/by-source/rotation-updated`):
+  the Darktable plugin posts an orientation intent; a coalescing
+  `RotationManager` (grace timer, last-orientation-wins) writes EXIF
+  `Orientation` to the DNG via exiftool under a `processing_locks` guard,
+  then syncs the DB row — PRD §5, ORCHESTRATION §7.4.
+- **Prometheus `/metrics`** endpoint exposing the five required series
+  (`rawimport_files_detected_total`, `rawimport_conversions_completed_total`,
+  `rawimport_conversion_duration_seconds`, `rawimport_queue_depth`,
+  `rawimport_db_size_bytes`) — PRD §3.6.
+
 **v1.0.0** — first tagged release of the Go service. Core pipeline is
 functional: watcher (poll + 2s debounce + partial-file skip), dnglab
 conversion via vibelabdng, SHA-256 of source and output, global
@@ -254,14 +265,7 @@ monotonic `IMG_{n}` sequence, re-conversion API, preview-updated hash
 sync, thumbnail sidecar (`GEN_THUMB_JPEG`), the REST API, and the
 Darktable Lua re-embed plugin.
 
-**Deferred to v1.0.1** (known core gaps vs the C++ rewrite):
-- Rotation / orientation sync endpoint
-  (`POST /api/v1/imports/by-source/rotation-updated` + coalesced
-  `RotationManager`) — PRD §5, ORCHESTRATION §7.4.
-- Prometheus `/metrics` endpoint (the 5 required series) — PRD §3.6.
-
-Both are in-scope core features and are scheduled for the next iterative
-tag. The service remains a personal tool, shared as-is under free and
+The service remains a personal tool, shared as-is under free and
 open source licenses.
 
 ## Credits and license

@@ -387,6 +387,12 @@ func (s *Store) RecordPreviewEdit(e PreviewEdit) error {
 	return tx.Commit()
 }
 
+// UpdateOrientation persists a synced EXIF orientation for an import (PRD §5, ORCH §7.4).
+func (s *Store) UpdateOrientation(id int64, orientation int) error {
+	_, err := s.db.Exec("UPDATE imports SET orientation = ? WHERE id = ?", orientation, id)
+	return err
+}
+
 // GetImportByOutputPath finds a record by its output DNG path (notify endpoint).
 func (s *Store) GetImportByOutputPath(path string) (*ImportRecord, error) {
 	var rec ImportRecord

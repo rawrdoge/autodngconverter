@@ -71,11 +71,14 @@ func (w *Worker) scanOnce() {
 		}
 		select {
 		case w.queue <- full:
+			metricFilesDetected(1)
+			metricSetQueueDepth(int64(len(w.queue)))
 		default:
 			log.Printf("queue full; skipping %s (alert)", full)
 			w.store.InsertAlert("warning", "queue_full", "bounded queue full, file not enqueued: "+full, "")
 		}
 	}
+	metricSetQueueDepth(int64(len(w.queue)))
 }
 
 // stable waits until the file size/mtime hasn't changed for 2s.
@@ -150,8 +153,10 @@ func (w *Worker) processFile(ctx context.Context, srcPath string) {
 	cctx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 	settings := w.defaultSettings(srcHash[:16])
+	convStart := time.Now()
 	if err := w.engine.Convert(cctx, srcPath, dstDNG, settings); err != nil {
 		log.Printf("convert failed %s: %v", srcPath, err)
+		metricConversionDone("failed", time.Since(convStart).Seconds())
 		w.store.InsertAlert("error", "conversion_failed", fmt.Sprintf("%s: %v", seqName, err), seqName)
 		return
 	}
@@ -192,6 +197,7 @@ func (w *Worker) processFile(ctx context.Context, srcPath string) {
 		log.Printf("insert error: %v", err)
 		return
 	}
+	metricConversionDone("completed", time.Since(convStart).Seconds())
 	// 14/15. archive source + move DNG (DNG already in output)
 	arcSrc := filepath.Join(arcDir, filepath.Base(srcPath))
 	if err := moveFile(srcPath, arcSrc); err != nil {
