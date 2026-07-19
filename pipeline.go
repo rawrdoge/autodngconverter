@@ -30,8 +30,8 @@ type ImportRecord struct {
 	ConversionSettings string
 	Status            string
 	Orientation       int // EXIF orientation 1-8, synced from Darktable (PRD §5, ORCH §7.4)
-	CreatedAt         time.Time
-	CompletedAt       time.Time
+	CreatedAt         *time.Time
+	CompletedAt       *time.Time
 }
 
 // ReconversionJob is a pending re-conversion (PRD §5.2).
