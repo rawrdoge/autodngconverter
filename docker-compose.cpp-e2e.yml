@@ -1,0 +1,40 @@
+version: "3.8"
+
+# Temporary e2e harness for the C++ rewrite (Phase 4 serial verify).
+# Not committed to the Go service's production compose.
+services:
+  mariadb:
+    image: mariadb:10.11-jammy
+    environment:
+      - MARIADB_ROOT_PASSWORD=rootpw
+      - MARIADB_DATABASE=rawimport
+      - MARIADB_USER=rawimport
+      - MARIADB_PASSWORD=rawpw
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  rawimport:
+    image: rawimport-build:latest
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=rawimport
+      - DB_PASSWORD=rawpw
+      - DB_NAME=rawimport
+      - HTTP_PORT=8080
+      - WATCH_DIR=/watch
+      - OUTPUT_DIR=/output
+      - ARCHIVE_DIR=/archive
+      - DB_DIR=/db
+      - ROTATION_GRACE_MS=200
+      - DIGIKAM_RESCAN=touch
+    ports:
+      - "8080:8080"
+    command: ["/usr/local/bin/rawimport-pipeline"]

@@ -15,19 +15,26 @@ and verify your files before trusting it with anything you cannot lose.
 
 This is one of two repositories:
 
-- `autodngconverter` (this repo): the Go service, the Darktable Lua plugin,
-  the SQL migrations, and the Docker files.
+- `autodngconverter` (this repo): **two service implementations** (Go + C++),
+  the Darktable Lua plugin, the SQL migrations, and the Docker files.
 - `vibelabdng`: a fork of [DNGLab](https://github.com/dnglab/dnglab) that adds
   a `reembed` subcommand. It is pulled in here as a git submodule under
   `vibelabdng/`.
 
-## Container image
+## Services & backends (v2.0.0)
 
-The image is built automatically and published to GitHub Container Registry on
-every push to `main`:
+| Service | Image | Backend | Driver | Notes |
+|---------|-------|---------|--------|-------|
+| **C++** (primary MariaDB) | `ghcr.io/rawrdoge/autodngconverter-cpp:latest` | **MariaDB 10.11** | `libmariadb` | Validated MariaDB implementation (`src/`, `Dockerfile.cpp`). Use this for MariaDB. |
+| **Go** (MySQL-only) | `ghcr.io/rawrdoge/autodngconverter:latest` | **MySQL 8.0** | `go-sql-driver/mysql` | MySQL backend only. **MariaDB is DEPRECATED for the Go service** — the pure-Go MySQL driver stalls on every query against MariaDB 10.11 over container TCP (protocol framing incompatibility, proven via C++ parity test). For MariaDB, use the C++ service. |
+
+## Container images
+
+Built automatically and published to GitHub Container Registry on every push to `main`:
 
 ```
-ghcr.io/rawrdoge/autodngconverter:latest
+ghcr.io/rawrdoge/autodngconverter:latest        # Go service (MySQL-only)
+ghcr.io/rawrdoge/autodngconverter-cpp:latest    # C++ service (MariaDB — recommended)
 ```
 
 The `dnglab` converter from the `vibelabdng` submodule is compiled into the

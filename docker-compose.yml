@@ -1,9 +1,14 @@
 # RawImport Pipeline — Docker Compose (PRD §6.3, MariaDB multi-node capable)
 # Usage: docker compose up -d
 # Set DB_PASSWORD / DB_ROOT_PASSWORD via environment or a .env file.
+#
+# v2.0.0: the MariaDB backend is served by the C++ service
+# (Dockerfile.cpp, src/) which uses libmariadb — the validated
+# MariaDB implementation. The Go service (Dockerfile) targets MySQL
+# only; see db.go / metrics.go for the deprecation note.
 services:
   rawimport:
-    image: ghcr.io/rawrdoge/autodngconverter:latest
+    image: ghcr.io/rawrdoge/autodngconverter-cpp:latest
     container_name: rawimport
     restart: unless-stopped
     environment:

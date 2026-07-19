@@ -1,0 +1,2 @@
+INSERT INTO sequences(name) VALUES('IMG_9001');
+INSERT INTO imports(sequence_id,source_path,source_hash,output_path,output_hash,camera_model,status,orientation) VALUES((SELECT id FROM sequences WHERE name='IMG_9001'),'/watch/L1.NRW','l1src','/output/IMG_9001.dng','l1out','TEST','completed',0);
