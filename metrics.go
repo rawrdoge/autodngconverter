@@ -57,13 +57,15 @@ func renderMetrics() string {
 	b.WriteString("rawimport_conversions_completed_total{status=\"completed\"} " + itoa(atomic.LoadInt64(&metrics.completed)) + "\n")
 	b.WriteString("rawimport_conversions_completed_total{status=\"failed\"} " + itoa(atomic.LoadInt64(&metrics.failed)) + "\n")
 	b.WriteString("# TYPE rawimport_conversion_duration_seconds histogram\n")
-	edges := []string{"1", "2", "5", "10", "20", "30", "60", "120", "300", "+Inf"}
+	edges := []string{"1", "2", "5", "10", "20", "30", "60", "120", "300"}
 	metrics.mu.Lock()
 	cum := int64(0)
 	for i, le := range edges {
 		cum += atomic.LoadInt64(&metrics.durBuckets[i])
 		b.WriteString("rawimport_conversion_duration_seconds_bucket{le=\"" + le + "\"} " + itoa(cum) + "\n")
 	}
+	// +Inf bucket is the cumulative total (all observations).
+	b.WriteString("rawimport_conversion_duration_seconds_bucket{le=\"+Inf\"} " + itoa(atomic.LoadInt64(&metrics.durCount)) + "\n")
 	b.WriteString("rawimport_conversion_duration_seconds_sum " + ftoa(metrics.durSum) + "\n")
 	b.WriteString("rawimport_conversion_duration_seconds_count " + itoa(atomic.LoadInt64(&metrics.durCount)) + "\n")
 	metrics.mu.Unlock()

@@ -42,6 +42,11 @@ func (s *APIServer) notifyAuth(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+// routes registers the REST API. Param routes (:sequence, :sha) are
+// registered BEFORE their static siblings (by-source, etc.) under the
+// shared /api/v1/imports/ prefix. Echo v4's radix router can
+// deadlock matching a param route when a static sibling was registered
+// first; registering params first avoids the collision (e2e regression).
 func (s *APIServer) routes() {
 	s.echo.GET("/health", s.health)
 	s.echo.GET("/api/v1/imports", s.listImports)

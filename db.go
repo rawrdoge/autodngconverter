@@ -9,29 +9,44 @@ import (
 	"strings"
 	"time"
 
+	// MySQL driver. NOTE: the Go service targets MySQL only. The pure-Go
+	// MySQL driver (go-sql-driver/mysql) stalls on every query against
+	// MariaDB 10.11 over container TCP (protocol framing incompatibility).
+	// For a MariaDB backend, use the C++ service (src/, Dockerfile.cpp) which
+	// uses libmariadb and is the validated MariaDB implementation.
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// Store wraps the MariaDB connection and all persistence operations (PRD §4.2.5).
+// Store wraps the database connection and all persistence operations (PRD §4.2.5).
+// Go service: MySQL backend. MariaDB backend is served by the C++ service.
 type Store struct {
 	db *sql.DB
 }
 
-// DSN builds the MariaDB connection string (PRD §4.2.5).
+// DSN builds the MySQL connection string (Go service: MySQL backend only).
+// For MariaDB, use the C++ service (src/, Dockerfile.cpp) which uses libmariadb.
 func (c Config) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&collation=utf8mb4_unicode_ci&timeout=5s",
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&collation=utf8mb4_unicode_ci&timeout=5s&readTimeout=8s&writeTimeout=8s",
 		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)
 }
 
-// OpenDB connects to MariaDB and verifies connectivity.
+// OpenDB connects to MySQL and verifies connectivity.
+// NOTE: Go service targets MySQL only. The pure-Go MySQL driver
+// (go-sql-driver/mysql) stalls against MariaDB 10.11 over container TCP;
+// use the C++ service for MariaDB backends.
 func OpenDB(c Config) (*Store, error) {
 	db, err := sql.Open("mysql", c.DSN())
 	if err != nil {
 		return nil, err
 	}
+	// Pool tuning: recycle connections before they go stale. MaxIdleTime <
+	// MaxLifetime < server wait_timeout keeps the pool serving fresh
+	// connections. readTimeout/writeTimeout (in DSN) bound any single stalled
+	// query so it can never block the pool indefinitely.
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxLifetime(30 * time.Second)
+	db.SetConnMaxIdleTime(10 * time.Second)
 	// Retry briefly for container startup ordering.
 	for i := 0; i < 10; i++ {
 		if err = db.Ping(); err == nil {
@@ -68,7 +83,7 @@ func (s *Store) Migrate(dir string) error {
 		if err != nil {
 			return err
 		}
-		// Go MySQL driver executes one statement per Exec; split on ";".
+		// MySQL driver executes one statement per Exec; split on ";".
 		for _, stmt := range splitSQL(string(sqlBytes)) {
 			if _, err := s.db.Exec(stmt); err != nil {
 				return fmt.Errorf("apply %s: %w", name, err)
@@ -185,15 +200,21 @@ func (s *Store) InsertAlert(sev, category, message, ref string) error {
 }
 
 // GetImportBySequence returns a record by IMG_n name (API §7.2).
+// Resolves the sequence id from the sequences table first, then queries
+// imports by sequence_id. Avoids a correlated subquery in WHERE, which
+// deadlocked under MariaDB + the Go driver in e2e.
 func (s *Store) GetImportBySequence(seq string) (*ImportRecord, error) {
-	var rec ImportRecord
 	var sid int64
+	if err := s.db.QueryRow(`SELECT id FROM sequences WHERE name = ?`, seq).Scan(&sid); err != nil {
+		return nil, err
+	}
+	var rec ImportRecord
 	err := s.db.QueryRow(`SELECT id, sequence_id, source_path, source_hash, output_path, output_hash,
-		camera_model, capture_date, capture_time, date_source, folder_schema, status, created_at, completed_at
-		FROM imports WHERE (SELECT name FROM sequences WHERE id = sequence_id) = ?`, seq).
+		COALESCE(camera_model,''), COALESCE(capture_date,''), COALESCE(capture_time,''), date_source, COALESCE(folder_schema,''), status, created_at, completed_at
+		FROM imports WHERE sequence_id = ?`, sid).
 		Scan(&rec.ID, &sid, &rec.SourcePath, &rec.SourceHash, &rec.OutputPath, &rec.OutputHash,
 			&rec.CameraModel, &rec.CaptureDate, &rec.CaptureTime, &rec.DateSource, &rec.FolderSchema,
-			&rec.Status, &rec.CreatedAt, &rec.CompletedAt)
+			&rec.Status, rec.CreatedAt, rec.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +229,8 @@ func (s *Store) ListImports(page, limit int, status string) ([]ImportRecord, int
 		return nil, 0, err
 	}
 	q := `SELECT (SELECT name FROM sequences WHERE id = sequence_id), source_path, source_hash,
-		output_path, output_hash, camera_model, capture_date, capture_time, date_source,
-		folder_schema, status, created_at, completed_at FROM imports`
+		output_path, output_hash, COALESCE(camera_model,''), COALESCE(capture_date,''), COALESCE(capture_time,''), date_source,
+		COALESCE(folder_schema,''), status, created_at, completed_at FROM imports`
 	args := []interface{}{}
 	if status != "" {
 		q += " WHERE status = ?"
@@ -227,7 +248,7 @@ func (s *Store) ListImports(page, limit int, status string) ([]ImportRecord, int
 		var r ImportRecord
 		if err := rows.Scan(&r.SequenceName, &r.SourcePath, &r.SourceHash, &r.OutputPath, &r.OutputHash,
 			&r.CameraModel, &r.CaptureDate, &r.CaptureTime, &r.DateSource, &r.FolderSchema,
-			&r.Status, &r.CreatedAt, &r.CompletedAt); err != nil {
+			&r.Status, r.CreatedAt, r.CompletedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)
@@ -309,11 +330,11 @@ func (s *Store) GetImportByHash(hash string) (*ImportRecord, error) {
 	var rec ImportRecord
 	var sid int64
 	err := s.db.QueryRow(`SELECT id, sequence_id, source_path, source_hash, output_path, output_hash,
-		camera_model, capture_date, capture_time, date_source, folder_schema, status, created_at, completed_at
+		COALESCE(camera_model,''), COALESCE(capture_date,''), COALESCE(capture_time,''), date_source, COALESCE(folder_schema,''), status, created_at, completed_at
 		FROM imports WHERE source_hash = ? OR output_hash = ? LIMIT 1`, hash, hash).
 		Scan(&rec.ID, &sid, &rec.SourcePath, &rec.SourceHash, &rec.OutputPath, &rec.OutputHash,
 			&rec.CameraModel, &rec.CaptureDate, &rec.CaptureTime, &rec.DateSource, &rec.FolderSchema,
-			&rec.Status, &rec.CreatedAt, &rec.CompletedAt)
+			&rec.Status, rec.CreatedAt, rec.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -356,12 +377,12 @@ var _ = strings.TrimSpace
 
 // PreviewEdit captures one preview re-embed event (PRD Q8).
 type PreviewEdit struct {
-	ImportID      int64
-	Worker        string
-	PrevHash      string
-	NewHash       string
-	PreviewWidth  int
-	PreviewHeight int
+	ImportID       int64
+	Worker         string
+	PrevHash       string
+	NewHash        string
+	PreviewWidth   int
+	PreviewHeight  int
 	PreviewQuality int
 }
 
@@ -398,11 +419,11 @@ func (s *Store) GetImportByOutputPath(path string) (*ImportRecord, error) {
 	var rec ImportRecord
 	var sid int64
 	err := s.db.QueryRow(`SELECT id, sequence_id, source_path, source_hash, output_path, output_hash,
-		camera_model, capture_date, capture_time, date_source, folder_schema, status, created_at, completed_at
+		COALESCE(camera_model,''), COALESCE(capture_date,''), COALESCE(capture_time,''), date_source, COALESCE(folder_schema,''), status, created_at, completed_at
 		FROM imports WHERE output_path = ? LIMIT 1`, path).
 		Scan(&rec.ID, &sid, &rec.SourcePath, &rec.SourceHash, &rec.OutputPath, &rec.OutputHash,
 			&rec.CameraModel, &rec.CaptureDate, &rec.CaptureTime, &rec.DateSource, &rec.FolderSchema,
-			&rec.Status, &rec.CreatedAt, &rec.CompletedAt)
+			&rec.Status, rec.CreatedAt, rec.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -417,11 +438,11 @@ func (s *Store) GetImportBySourcePath(path string) (*ImportRecord, error) {
 	var rec ImportRecord
 	var sid int64
 	err := s.db.QueryRow(`SELECT id, sequence_id, source_path, source_hash, output_path, output_hash,
-		camera_model, capture_date, capture_time, date_source, folder_schema, status, created_at, completed_at
+		COALESCE(camera_model,''), COALESCE(capture_date,''), COALESCE(capture_time,''), date_source, COALESCE(folder_schema,''), status, created_at, completed_at
 		FROM imports WHERE source_path = ? LIMIT 1`, path).
 		Scan(&rec.ID, &sid, &rec.SourcePath, &rec.SourceHash, &rec.OutputPath, &rec.OutputHash,
 			&rec.CameraModel, &rec.CaptureDate, &rec.CaptureTime, &rec.DateSource, &rec.FolderSchema,
-			&rec.Status, &rec.CreatedAt, &rec.CompletedAt)
+			&rec.Status, rec.CreatedAt, rec.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
