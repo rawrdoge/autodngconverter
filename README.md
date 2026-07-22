@@ -43,7 +43,7 @@ do not need to build or mount anything to convert files.
 
 ## Running with Docker
 
-The service is designed to run as a container alongside MariaDB. A
+The service is designed to run as a container alongside MariaDB/MySQL. A
 `docker-compose.yml` is included that pulls the published image.
 
 ### docker-compose.yml
@@ -55,8 +55,8 @@ services:
     container_name: rawimport
     restart: unless-stopped
     environment:
-      - DB_DRIVER=mariadb
-      - DB_HOST=mariadb
+      - DB_DRIVER=mysql
+      - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=rawimport
       - DB_PASSWORD=${DB_PASSWORD}
@@ -79,29 +79,29 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      mariadb:
+      mysql:
         condition: service_healthy
 
-  mariadb:
-    image: mariadb:10.11-jammy
-    container_name: rawimport_mariadb
+  mysql:
+    image: mysql:8.0
+    container_name: rawimport_mysql
     restart: unless-stopped
     environment:
-      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-      - MARIADB_DATABASE=rawimport
-      - MARIADB_USER=rawimport
-      - MARIADB_PASSWORD=${DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=rawimport
+      - MYSQL_USER=rawimport
+      - MYSQL_PASSWORD=${DB_PASSWORD}
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
 
 volumes:
-  mariadb-data:
+  mysql-data:
 ```
 
 Set `DB_PASSWORD` and `DB_ROOT_PASSWORD` in a `.env` file next to the compose
@@ -114,6 +114,10 @@ docker compose up -d
 The watcher picks up files dropped into the `watch` volume, converts them, and
 writes DNGs to `output` and the originals to `archive`.
 
+### For MariaDB (use C++ service)
+
+Use `docker-compose.cpp-e2e.yml` which pulls `ghcr.io/rawrdoge/autodngconverter-cpp:latest` and runs against `mariadb:10.11-jammy`.
+
 ## Environment variables
 
 All configuration is via environment variables. Defaults are shown in
@@ -121,12 +125,12 @@ parentheses.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `DB_DRIVER` | Database backend. Only `mariadb` is implemented in v1. | `mariadb` |
-| `DB_HOST` | MariaDB host. | `mariadb` |
-| `DB_PORT` | MariaDB port. | `3306` |
-| `DB_USER` | MariaDB user. | (empty) |
-| `DB_PASSWORD` | MariaDB password. | (empty) |
-| `DB_NAME` | MariaDB database name. | `rawimport` |
+| `DB_DRIVER` | Database backend. `mysql` (Go) or `mariadb` (C++). | `mysql` |
+| `DB_HOST` | Database host. | `mysql` |
+| `DB_PORT` | Database port. | `3306` |
+| `DB_USER` | Database user. | (empty) |
+| `DB_PASSWORD` | Database password. | (empty) |
+| `DB_NAME` | Database name. | `rawimport` |
 | `DB_SSLMODE` | TLS mode for the DB connection. | (empty) |
 | `WATCH_DIR` | Directory the watcher scans for new RAW files. | `/watch` |
 | `OUTPUT_DIR` | Directory DNGs are written to. | `/output` |
@@ -215,7 +219,7 @@ the URL is unreachable or the token does not match.
 go build -o rawimport-pipeline .
 ```
 
-Copy `.env.example` to `.env` and fill in your MariaDB credentials.
+Copy `.env.example` to `.env` and fill in your MySQL credentials.
 
 ## Goals
 
@@ -253,6 +257,13 @@ Possible later work, in rough order:
   detection for folder organization, and a mobile monitoring app.
 
 ## Status
+
+**v1.0.3** — Go service fixes:
+- **Bug #1**: Fixed `/metrics` endpoint panic (index out of range on `durBuckets[9]`). Added bounds check in `metrics.go:37` — `for b < len(edges) && durSec > edges[b]`.
+- **Bug #2**: Resolved Go service query stalls against MariaDB 10.11. Root cause: pure-Go MySQL driver (`go-sql-driver/mysql`) cannot frame MariaDB 10.11 protocol responses over container TCP. **Go service is now MySQL-only**; MariaDB users should use the C++ service (`libmariadb` driver). Documented in `db.go`, `go.mod`, and `docker-compose.go-e2e.yml`.
+- **NULL-safe timestamps**: `ImportRecord.CreatedAt` and `CompletedAt` changed from `time.Time` to `*time.Time` in `pipeline.go` (commit `365c3f3`). Enables proper NULL handling in DB scans.
+- **Config hardening**: DSN now includes `timeout=5s`, `readTimeout=8s`, `writeTimeout=8s`; connection pool tuned (`SetMaxOpenConns=10`, `SetMaxIdleConns=5`, `SetConnMaxLifetime=5m`, `SetConnMaxIdleTime=2m`).
+- **Docker Compose**: `docker-compose.go-e2e.yml` tests Go service against MySQL 8.0 only (MariaDB testing moved to `docker-compose.cpp-e2e.yml`).
 
 **v1.0.1** — adds the two core features that were deferred from v1.0.0:
 - **Rotation / orientation sync** (`POST /api/v1/imports/by-source/rotation-updated`):
