@@ -1,61 +1,40 @@
-# RawImport Pipeline — Docker Compose (PRD §6.3, MariaDB multi-node capable)
-# Usage: docker compose up -d
-# Set DB_PASSWORD / DB_ROOT_PASSWORD via environment or a .env file.
-#
-# v2.0.0: the MariaDB backend is served by the C++ service
-# (Dockerfile.cpp, src/) which uses libmariadb — the validated
-# MariaDB implementation. The Go service (Dockerfile) targets MySQL
-# only; see db.go / metrics.go for the deprecation note.
-services:
-  rawimport:
-    image: ghcr.io/rawrdoge/autodngconverter-cpp:latest
-    container_name: rawimport
-    restart: unless-stopped
-    environment:
-      - DB_DRIVER=mariadb
-      - DB_HOST=mariadb
-      - DB_PORT=3306
-      - DB_USER=rawimport
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=rawimport
-      - DB_SSLMODE=disable
-      - WATCH_DIR=/watch
-      - OUTPUT_DIR=/output
-      - ARCHIVE_DIR=/archive
-      - CONVERTER_ENGINE=dnglab
-      - EXIFTOOL_BIN=exiftool
-      - FOLDER_SCHEMA=%Y/%m
-      - FILE_PATTERN=IMG_{seq}
-      - POLL_INTERVAL=10
-      - LOG_LEVEL=info
-      - PORT=8080
-    volumes:
-      - /mnt/nas/photos/watch:/watch
-      - /mnt/nas/photos/output:/output
-      - /mnt/nas/photos/archive:/archive
-    ports:
-      - "8080:8080"
-    depends_on:
-      mariadb:
-        condition: service_healthy
+version: "3.8"
 
+# Temporary e2e harness for the C++ rewrite (Phase 4 serial verify).
+# Not committed to the Go service's production compose.
+services:
   mariadb:
     image: mariadb:10.11-jammy
-    container_name: rawimport_mariadb
-    restart: unless-stopped
     environment:
-      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=rootpw
       - MARIADB_DATABASE=rawimport
       - MARIADB_USER=rawimport
-      - MARIADB_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - mariadb-data:/var/lib/mysql
+      - MARIADB_PASSWORD=rawpw
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
       start_period: 30s
 
-volumes:
-  mariadb-data:
+  rawimport:
+    image: rawimport-build:latest
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=rawimport
+      - DB_PASSWORD=rawpw
+      - DB_NAME=rawimport
+      - HTTP_PORT=8080
+      - WATCH_DIR=/watch
+      - OUTPUT_DIR=/output
+      - ARCHIVE_DIR=/archive
+      - DB_DIR=/db
+      - ROTATION_GRACE_MS=200
+      - DIGIKAM_RESCAN=touch
+    ports:
+      - "8080:8080"
+    command: ["/usr/local/bin/rawimport-pipeline"]

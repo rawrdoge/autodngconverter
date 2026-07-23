@@ -13,37 +13,38 @@ and verify your files before trusting it with anything you cannot lose.
 
 ## Repository layout
 
-This is one of two repositories:
-
-- `autodngconverter` (this repo): **two service implementations** (Go + C++),
-  the Darktable Lua plugin, the SQL migrations, and the Docker files.
-- `vibelabdng`: a fork of [DNGLab](https://github.com/dnglab/dnglab) that adds
-  a `reembed` subcommand. It is pulled in here as a git submodule under
-  `vibelabdng/`.
+- `src/` — C++ service implementation (primary, v2.0.0+)
+- `docs/` — PRD, orchestration, and lead escalation documents
+- `legacy/go/` — **Legacy Go service (v1.x, MySQL-only, frozen at v1.0.3)**
+- `vibelabdng/` — DNGLab fork with `reembed` subcommand (git submodule)
+- `tools/` — Shared utilities (betterembeds.lua, dng_previewembed.cpp)
+- `scripts/` — Build and publish scripts
+- `migrations/` — SQL schema migrations (MariaDB/MySQL compatible)
 
 ## Services & backends (v2.0.0)
 
 | Service | Image | Backend | Driver | Notes |
 |---------|-------|---------|--------|-------|
-| **C++** (primary MariaDB) | `ghcr.io/rawrdoge/autodngconverter-cpp:latest` | **MariaDB 10.11** | `libmariadb` | Validated MariaDB implementation (`src/`, `Dockerfile.cpp`). Use this for MariaDB. |
-| **Go** (MySQL-only) | `ghcr.io/rawrdoge/autodngconverter:latest` | **MySQL 8.0** | `go-sql-driver/mysql` | MySQL backend only. **MariaDB is DEPRECATED for the Go service** — the pure-Go MySQL driver stalls on every query against MariaDB 10.11 over container TCP (protocol framing incompatibility, proven via C++ parity test). For MariaDB, use the C++ service. |
+| **C++** (primary) | `ghcr.io/rawrdoge/autodngconverter-cpp:latest` | **MariaDB 10.11** | `libmariadb` | Validated MariaDB implementation. Use this for MariaDB. |
+| **Go** (legacy) | `ghcr.io/rawrdoge/autodngconverter:v1.0.3` | **MySQL 8.0** | `go-sql-driver/mysql` | **Frozen at v1.0.3**. MySQL-only. MariaDB is DEPRECATED for Go — the pure-Go MySQL driver stalls on every query against MariaDB 10.11 over container TCP (protocol framing incompatibility, proven via C++ parity test). For MariaDB, use the C++ service. |
 
 ## Container images
 
 Built automatically and published to GitHub Container Registry on every push to `main`:
 
 ```
-ghcr.io/rawrdoge/autodngconverter:latest        # Go service (MySQL-only)
 ghcr.io/rawrdoge/autodngconverter-cpp:latest    # C++ service (MariaDB — recommended)
+ghcr.io/rawrdoge/autodngconverter-cpp:v2.0.0    # C++ v2.0.0
+ghcr.io/rawrdoge/autodngconverter:v1.0.3        # Go legacy (MySQL-only, frozen)
 ```
 
 The `dnglab` converter from the `vibelabdng` submodule is compiled into the
 image at build time, so `DNGLAB_BIN` already points at the baked-in binary. You
 do not need to build or mount anything to convert files.
 
-## Running with Docker
+## Running with Docker (C++ service — recommended)
 
-The service is designed to run as a container alongside MariaDB/MySQL. A
+The service is designed to run as a container alongside MariaDB. A
 `docker-compose.yml` is included that pulls the published image.
 
 ### docker-compose.yml
@@ -51,12 +52,12 @@ The service is designed to run as a container alongside MariaDB/MySQL. A
 ```yaml
 services:
   rawimport:
-    image: ghcr.io/rawrdoge/autodngconverter:latest
+    image: ghcr.io/rawrdoge/autodngconverter-cpp:latest
     container_name: rawimport
     restart: unless-stopped
     environment:
-      - DB_DRIVER=mysql
-      - DB_HOST=mysql
+      - DB_DRIVER=mariadb
+      - DB_HOST=mariadb
       - DB_PORT=3306
       - DB_USER=rawimport
       - DB_PASSWORD=${DB_PASSWORD}
@@ -79,29 +80,29 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      mysql:
+      mariadb:
         condition: service_healthy
 
-  mysql:
-    image: mysql:8.0
-    container_name: rawimport_mysql
+  mariadb:
+    image: mariadb:10.11-jammy
+    container_name: rawimport_mariadb
     restart: unless-stopped
     environment:
-      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-      - MYSQL_DATABASE=rawimport
-      - MYSQL_USER=rawimport
-      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=rawimport
+      - MARIADB_USER=rawimport
+      - MARIADB_PASSWORD=${DB_PASSWORD}
     volumes:
-      - mysql-data:/var/lib/mysql
+      - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
 
 volumes:
-  mysql-data:
+  mariadb-data:
 ```
 
 Set `DB_PASSWORD` and `DB_ROOT_PASSWORD` in a `.env` file next to the compose
@@ -114,9 +115,9 @@ docker compose up -d
 The watcher picks up files dropped into the `watch` volume, converts them, and
 writes DNGs to `output` and the originals to `archive`.
 
-### For MariaDB (use C++ service)
+### For MySQL (legacy Go service)
 
-Use `docker-compose.cpp-e2e.yml` which pulls `ghcr.io/rawrdoge/autodngconverter-cpp:latest` and runs against `mariadb:10.11-jammy`.
+Use the `legacy/go` branch and the `ghcr.io/rawrdoge/autodngconverter:v1.0.3` image with a MySQL 8.0 backend. See `legacy/go/README.go.md` for details.
 
 ## Environment variables
 
@@ -125,8 +126,8 @@ parentheses.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `DB_DRIVER` | Database backend. `mysql` (Go) or `mariadb` (C++). | `mysql` |
-| `DB_HOST` | Database host. | `mysql` |
+| `DB_DRIVER` | Database backend. `mariadb` (C++) or `mysql` (Go legacy). | `mariadb` |
+| `DB_HOST` | Database host. | `mariadb` |
 | `DB_PORT` | Database port. | `3306` |
 | `DB_USER` | Database user. | (empty) |
 | `DB_PASSWORD` | Database password. | (empty) |
@@ -215,11 +216,22 @@ the URL is unreachable or the token does not match.
 
 ## Building without Docker
 
+### C++ service (primary)
+
 ```
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
+
+### Go service (legacy, frozen at v1.0.3)
+
+```
+cd legacy/go
 go build -o rawimport-pipeline .
 ```
 
-Copy `.env.example` to `.env` and fill in your MySQL credentials.
+Copy `.env.example` to `.env` and fill in your database credentials.
 
 ## Goals
 
@@ -258,14 +270,18 @@ Possible later work, in rough order:
 
 ## Status
 
-**v1.0.3** — Go service fixes:
-- **Bug #1**: Fixed `/metrics` endpoint panic (index out of range on `durBuckets[9]`). Added bounds check in `metrics.go:37` — `for b < len(edges) && durSec > edges[b]`.
-- **Bug #2**: Resolved Go service query stalls against MariaDB 10.11. Root cause: pure-Go MySQL driver (`go-sql-driver/mysql`) cannot frame MariaDB 10.11 protocol responses over container TCP. **Go service is now MySQL-only**; MariaDB users should use the C++ service (`libmariadb` driver). Documented in `db.go`, `go.mod`, and `docker-compose.go-e2e.yml`.
-- **NULL-safe timestamps**: `ImportRecord.CreatedAt` and `CompletedAt` changed from `time.Time` to `*time.Time` in `pipeline.go` (commit `365c3f3`). Enables proper NULL handling in DB scans.
-- **Config hardening**: DSN now includes `timeout=5s`, `readTimeout=8s`, `writeTimeout=8s`; connection pool tuned (`SetMaxOpenConns=10`, `SetMaxIdleConns=5`, `SetConnMaxLifetime=5m`, `SetConnMaxIdleTime=2m`).
-- **Docker Compose**: `docker-compose.go-e2e.yml` tests Go service against MySQL 8.0 only (MariaDB testing moved to `docker-compose.cpp-e2e.yml`).
+**v2.0.0** — C++ service promoted to primary implementation (MariaDB, `libmariadb`).
+- Go service moved to `legacy/go/` branch, frozen at **v1.0.3** (MySQL-only).
+- Repository restructured: C++ at root, docs in `docs/`, Go legacy in `legacy/go/`.
+- Docker images: `autodngconverter-cpp:latest` (C++, MariaDB) and `autodngconverter:v1.0.3` (Go, MySQL-only, no `latest` tag).
 
-**v1.0.1** — adds the two core features that were deferred from v1.0.0:
+**v1.0.3** — Go service fixes (final Go release):
+- **Bug #1**: Fixed `/metrics` endpoint panic (index out of range on `durBuckets[9]`). Added bounds check in `metrics.go:37`.
+- **Bug #2**: Resolved Go service query stalls against MariaDB 10.11. Root cause: pure-Go MySQL driver (`go-sql-driver/mysql`) cannot frame MariaDB 10.11 protocol responses over container TCP. **Go service is now MySQL-only**; MariaDB users should use the C++ service (`libmariadb` driver).
+- **NULL-safe timestamps**: `ImportRecord.CreatedAt` and `CompletedAt` changed from `time.Time` to `*time.Time` in `pipeline.go`. Enables proper NULL handling in DB scans.
+- **Config hardening**: DSN now includes `timeout=5s`, `readTimeout=8s`, `writeTimeout=8s`; connection pool tuned (`SetMaxOpenConns=10`, `SetMaxIdleConns=5`, `SetConnMaxLifetime=5m`, `SetConnMaxIdleTime=2m`).
+
+**v1.0.1** — adds the two core features deferred from v1.0.0:
 - **Rotation / orientation sync** (`POST /api/v1/imports/by-source/rotation-updated`):
   the Darktable plugin posts an orientation intent; a coalescing
   `RotationManager` (grace timer, last-orientation-wins) writes EXIF
@@ -298,5 +314,4 @@ credits these contributors:
 - Pedro Corte-Real (rawloader rust library)
 - Alexey Danilchenko and Alex Tutubalin / LibRaw LLC (crx decoder from libraw)
 
-The original code in this repository (the Go service, the Lua plugin, and the
-docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.
+The original code in this repository (the C++ service, the Go legacy service, the Lua plugin, and the docs) is licensed under the MIT License. See `LICENSE` and `NOTICE`.

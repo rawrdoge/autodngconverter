@@ -1,3 +1,18 @@
+# PRD & Orchestration docs
+PRD_*.md
+ORCHESTRATION_*.md
+LEAD_ESCALATIONS.md
+
+# Go legacy (exclude from C++ build context)
+*.go
+go.mod
+go.sum
+docker-compose.go-e2e.yml
+Dockerfile
+
+# Test artifacts
+rot_test.json
+
 # Secrets / local config
 .env
 

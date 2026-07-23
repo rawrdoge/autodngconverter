@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS reconversions (
     previous_output_hash CHAR(64) NOT NULL,
     new_output_hash CHAR(64),
     conversion_settings JSON NOT NULL,
+    reason TEXT,
     triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL DEFAULT NULL,
     status ENUM('pending','running','completed','failed') DEFAULT 'pending',
@@ -55,12 +56,11 @@ CREATE TABLE IF NOT EXISTS reconversions (
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS processing_locks (
-    source_hash CHAR(64) NOT NULL,
-    source_path TEXT NOT NULL,
-    locked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL,
+    import_id BIGINT UNSIGNED NOT NULL,
     worker_id VARCHAR(64),
-    PRIMARY KEY (source_hash),
+    expires_at BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (import_id),
     INDEX idx_expires (expires_at)
 ) ENGINE=InnoDB;
 
