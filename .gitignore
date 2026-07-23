@@ -30,3 +30,7 @@ memory-bank/
 DSCN6496.NRW
 *.NRW
 *.NEF
+
+# Internal docs & legacy (version-segmented via tags, not committed)
+docs/
+legacy/
