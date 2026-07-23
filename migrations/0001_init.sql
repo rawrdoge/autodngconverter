@@ -1,10 +1,11 @@
--- RawImport Pipeline v1 schema (merged: base + preview-edits + legacy-status).
+-- RawImport Pipeline v1 schema (merged: base + preview-edits + legacy-status + orientation).
 -- Applied by the embedded migration runner (Q10). Idempotent: safe to re-run
 -- on a fresh or already-migrated database.
 --
--- This single file replaces the former 0001/0002/0003 split. The schema below
--- is the complete, current state (including the preview_edits audit table, the
--- imports.last_preview_edit_at column, and the 'legacy' status value).
+-- This single file replaces the former 0001/0002 split. The schema below
+-- is the complete, current state (including the preview_edits audit table,
+-- the imports.last_preview_edit_at column, the 'legacy' status value,
+-- and the orientation column for cross-app rotation sync).
 
 CREATE TABLE IF NOT EXISTS sequences (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS imports (
     completed_at TIMESTAMP NULL DEFAULT NULL,
     error_message TEXT,
     last_preview_edit_at TIMESTAMP NULL DEFAULT NULL,
+    orientation TINYINT UNSIGNED NULL COMMENT 'EXIF Orientation 1-8 agreed across apps, NULL means unset',
     FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE RESTRICT,
     INDEX idx_source_hash (source_hash),
     INDEX idx_output_hash (output_hash),

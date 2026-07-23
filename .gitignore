@@ -34,3 +34,6 @@ DSCN6496.NRW
 # Internal docs & legacy (version-segmented via tags, not committed)
 docs/
 legacy/
+
+# Claude
+.claude/
