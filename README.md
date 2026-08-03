@@ -98,13 +98,6 @@ Install `betterembeds.lua`, set `RAWIMPORT_API_URL` at top of script.
 mkdir build && cd build && cmake .. && make -j$(nproc)
 ```
 
-## Versioning
-
-- **v2.x** (main): C++, MariaDB 10.11, `libmariadb`
-- **v1.x** (tags `v1.0.0`, `v1.0.1`, `v1.0.3`): Go, MySQL 8.0 only
-
-Legacy Go service frozen at v1.0.3. MariaDB unsupported in Go (pure-Go driver protocol incompatibility).
-
 ## License
 
 MIT. See `LICENSE`, `NOTICE`.
