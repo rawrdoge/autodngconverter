@@ -1,36 +1,18 @@
 version: "3.8"
 
 services:
-  mariadb:
-    image: mariadb:10.11-jammy
-    container_name: rawimport_mariadb
-    restart: unless-stopped
-    environment:
-      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-      - MARIADB_DATABASE=rawimport
-      - MARIADB_USER=rawimport
-      - MARIADB_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - mariadb-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
   rawimport:
     image: ghcr.io/rawrdoge/autodngconverter:latest
     container_name: rawimport
     restart: unless-stopped
     environment:
       - DB_DRIVER=mariadb
-      - DB_HOST=mariadb
-      - DB_PORT=3306
-      - DB_USER=rawimport
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=rawimport
-      - DB_SSLMODE=disable
+      - DB_NAME=${DB_NAME}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
       - WATCH_DIR=/watch
       - OUTPUT_DIR=/output
       - ARCHIVE_DIR=/archive
@@ -42,14 +24,8 @@ services:
       - LOG_LEVEL=info
       - PORT=8080
     volumes:
-      - ${WATCH_HOST:-/mnt/nas/photos/watch}:/watch
-      - ${OUTPUT_HOST:-/mnt/nas/photos/output}:/output
-      - ${ARCHIVE_HOST:-/mnt/nas/photos/archive}:/archive
+      - /mnt/nas/photos/watch:/watch
+      - /mnt/nas/photos/output:/output
+      - /mnt/nas/photos/archive:/archive
     ports:
       - "8080:8080"
-    depends_on:
-      mariadb:
-        condition: service_healthy
-
-volumes:
-  mariadb-data:

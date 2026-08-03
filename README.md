@@ -7,20 +7,35 @@ Personal tool, not a hardened product. Use at your own risk.
 ## Quick Start
 
 ```bash
-# Configure
-cp .env.example .env
-# edit .env with your NAS paths & DB passwords
+# 1. Provision MariaDB (see Database Provisioning below)
 
-# Run (published image, MariaDB 10.11)
+# 2. Configure
+cp .env.example .env
+# edit .env with your MariaDB connection details
+
+# 3. Edit docker-compose.yml volumes to point to your NAS paths
+#    volumes:
+#      - /your/watch/path:/watch
+#      - /your/output/path:/output
+#      - /your/archive/path:/archive
+
+# 4. Run (published image, MariaDB 10.11+)
 docker compose up -d
 ```
 
-The compose file mounts host directories via variables in `.env`:
-- `WATCH_HOST` → `/watch` (input RAWs)
-- `OUTPUT_HOST` → `/output` (DNGs)
-- `ARCHIVE_HOST` → `/archive` (original RAWs)
+## Database Provisioning
 
-Defaults: `/mnt/nas/photos/{watch,output,archive}`
+Requires external MariaDB 10.11+ with database and user pre-created:
+
+```sql
+CREATE DATABASE rawimport CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'rawimport'@'%' IDENTIFIED BY 'your-password';
+GRANT CREATE, ALTER, DROP, INDEX, INSERT, UPDATE, DELETE, SELECT, REFERENCES
+  ON rawimport.* TO 'rawimport'@'%';
+FLUSH PRIVILEGES;
+```
+
+The app runs embedded migrations on startup (`migrations/0001_init.sql`).
 
 ## Configuration
 
@@ -29,17 +44,13 @@ All via environment variables (`.env`):
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DB_DRIVER` | `mariadb` | Database backend |
-| `DB_HOST` | `mariadb` | DB host |
+| `DB_HOST` | `your-mariadb-host` | DB host (IP or hostname) |
 | `DB_PORT` | `3306` | DB port |
 | `DB_USER` | `rawimport` | DB user |
 | `DB_PASSWORD` | — | **Required** |
 | `DB_NAME` | `rawimport` | DB name |
-| `DB_SSLMODE` | `disable` | TLS mode |
-| `DB_ROOT_PASSWORD` | — | **Required** for MariaDB init |
-| `WATCH_HOST` | `/mnt/nas/photos/watch` | Host input directory |
-| `OUTPUT_HOST` | `/mnt/nas/photos/output` | Host DNG output |
-| `ARCHIVE_HOST` | `/mnt/nas/photos/archive` | Host RAW archive |
-| `WATCH_DIR` | `/watch` | Container input |
+| `DB_SSLMODE` | `disable` | TLS mode (`disable`, `require`, `verify-ca`, `verify-full`) |
+| `WATCH_DIR` | `/watch` | Container input directory |
 | `OUTPUT_DIR` | `/output` | Container DNG output |
 | `ARCHIVE_DIR` | `/archive` | Container RAW archive |
 | `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
@@ -57,6 +68,8 @@ All via environment variables (`.env`):
 | `DEF_PREVIEW_FULL` | `4000x3000` | Full preview |
 | `DEF_JPEG_QUALITY` | `92` | JPEG quality |
 | `DEF_LINEAR` | `false` | Linear DNG flag |
+
+**Host paths** are configured in `docker-compose.yml` under `volumes:` (not in `.env`).
 
 ## API
 
