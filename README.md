@@ -9,13 +9,18 @@ Personal tool, not a hardened product. Use at your own risk.
 ```bash
 # Configure
 cp .env.example .env
-# edit .env with DB_PASSWORD, DB_ROOT_PASSWORD
+# edit .env with your NAS paths & DB passwords
 
-# Run (C++ service, MariaDB 10.11)
+# Run (published image, MariaDB 10.11)
 docker compose up -d
 ```
 
-Volumes: `/watch` (input), `/output` (DNG), `/archive` (original RAW).
+The compose file mounts host directories via variables in `.env`:
+- `WATCH_HOST` → `/watch` (input RAWs)
+- `OUTPUT_HOST` → `/output` (DNGs)
+- `ARCHIVE_HOST` → `/archive` (original RAWs)
+
+Defaults: `/mnt/nas/photos/{watch,output,archive}`
 
 ## Configuration
 
@@ -30,9 +35,13 @@ All via environment variables (`.env`):
 | `DB_PASSWORD` | — | **Required** |
 | `DB_NAME` | `rawimport` | DB name |
 | `DB_SSLMODE` | `disable` | TLS mode |
-| `WATCH_DIR` | `/watch` | Input directory |
-| `OUTPUT_DIR` | `/output` | DNG output |
-| `ARCHIVE_DIR` | `/archive` | RAW archive |
+| `DB_ROOT_PASSWORD` | — | **Required** for MariaDB init |
+| `WATCH_HOST` | `/mnt/nas/photos/watch` | Host input directory |
+| `OUTPUT_HOST` | `/mnt/nas/photos/output` | Host DNG output |
+| `ARCHIVE_HOST` | `/mnt/nas/photos/archive` | Host RAW archive |
+| `WATCH_DIR` | `/watch` | Container input |
+| `OUTPUT_DIR` | `/output` | Container DNG output |
+| `ARCHIVE_DIR` | `/archive` | Container RAW archive |
 | `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
 | `FILE_PATTERN` | `IMG_{seq}` | Output filename |
 | `CONVERTER_ENGINE` | `dnglab` | Converter binary |

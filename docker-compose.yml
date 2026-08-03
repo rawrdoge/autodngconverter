@@ -1,15 +1,17 @@
 version: "3.8"
 
-# Temporary e2e harness for the C++ rewrite (Phase 4 serial verify).
-# Not committed to the Go service's production compose.
 services:
   mariadb:
     image: mariadb:10.11-jammy
+    container_name: rawimport_mariadb
+    restart: unless-stopped
     environment:
-      - MARIADB_ROOT_PASSWORD=rootpw
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
       - MARIADB_DATABASE=rawimport
       - MARIADB_USER=rawimport
-      - MARIADB_PASSWORD=rawpw
+      - MARIADB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -18,23 +20,36 @@ services:
       start_period: 30s
 
   rawimport:
-    image: rawimport-build:latest
-    depends_on:
-      mariadb:
-        condition: service_healthy
+    image: ghcr.io/rawrdoge/autodngconverter:latest
+    container_name: rawimport
+    restart: unless-stopped
     environment:
+      - DB_DRIVER=mariadb
       - DB_HOST=mariadb
       - DB_PORT=3306
       - DB_USER=rawimport
-      - DB_PASSWORD=rawpw
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=rawimport
-      - HTTP_PORT=8080
+      - DB_SSLMODE=disable
       - WATCH_DIR=/watch
       - OUTPUT_DIR=/output
       - ARCHIVE_DIR=/archive
-      - DB_DIR=/db
-      - ROTATION_GRACE_MS=200
-      - DIGIKAM_RESCAN=touch
+      - CONVERTER_ENGINE=dnglab
+      - EXIFTOOL_BIN=exiftool
+      - FOLDER_SCHEMA=%Y/%m
+      - FILE_PATTERN=IMG_{seq}
+      - POLL_INTERVAL=10
+      - LOG_LEVEL=info
+      - PORT=8080
+    volumes:
+      - ${WATCH_HOST:-/mnt/nas/photos/watch}:/watch
+      - ${OUTPUT_HOST:-/mnt/nas/photos/output}:/output
+      - ${ARCHIVE_HOST:-/mnt/nas/photos/archive}:/archive
     ports:
       - "8080:8080"
-    command: ["/usr/local/bin/rawimport-pipeline"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+volumes:
+  mariadb-data:
