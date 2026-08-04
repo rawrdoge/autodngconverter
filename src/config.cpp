@@ -64,6 +64,8 @@ Config LoadConfig() {
     c.folder_schema = env_or("FOLDER_SCHEMA", c.folder_schema);
     c.file_pattern = env_or("FILE_PATTERN", c.file_pattern);
     c.converter_engine = env_or("CONVERTER_ENGINE", c.converter_engine);
+    c.converter_engine_bin = env_or("CONVERTER_ENGINE_BIN", c.converter_engine_bin);
+    c.appdata_dir = env_or("APPDATA_DIR", c.appdata_dir);
     c.exiftool_bin = env_or("EXIFTOOL_BIN", c.exiftool_bin);
 
     c.gen_thumb_jpeg = env_bool("GEN_THUMB_JPEG", c.gen_thumb_jpeg);

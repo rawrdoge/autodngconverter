@@ -29,8 +29,8 @@ struct Worker::Impl {
     std::atomic<int> queue_depth{0};
 };
 
-Worker::Worker(const Config& cfg, Store& store, ConverterEngine* engine)
-    : cfg_(cfg), store_(store), engine_(engine), stop_(false),
+Worker::Worker(const Config& cfg, Store& store, ConverterEngine* engine, PreviewEmbedder* embedder)
+    : cfg_(cfg), store_(store), engine_(engine), embedder_(embedder), stop_(false),
       p_(std::make_unique<Impl>()) {}
 
 Worker::~Worker() { Stop(); }

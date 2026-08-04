@@ -36,9 +36,9 @@ public:
 };
 
 // Factory: selects engine by CONVERTER_ENGINE env (default dnglab).
-ConverterEngine* MakeConverter(const std::string& engine_name);
+ConverterEngine* MakeConverter(const Config& cfg);
 
 // Build the preferred embedder chain (dnglab first, then DNG SDK, then exiftool).
-PreviewEmbedder* MakeEmbedder();
+PreviewEmbedder* MakeEmbedder(const Config& cfg);
 
 } // namespace rawimport

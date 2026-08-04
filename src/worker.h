@@ -17,7 +17,7 @@ namespace rawimport {
 // not concurrency-safe). Re-conversion drained in background.
 class Worker {
 public:
-    Worker(const Config& cfg, Store& store, ConverterEngine* engine);
+    Worker(const Config& cfg, Store& store, ConverterEngine* engine, PreviewEmbedder* embedder);
     ~Worker();
 
     // Start the poll loop + background threads. Non-blocking.
@@ -40,6 +40,7 @@ private:
     const Config& cfg_;
     Store& store_;
     ConverterEngine* engine_;
+    PreviewEmbedder* embedder_;
     std::atomic<bool> stop_{false};
     struct Impl;
     std::unique_ptr<Impl> p_;

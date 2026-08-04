@@ -17,6 +17,8 @@ services:
       - OUTPUT_DIR=/output
       - ARCHIVE_DIR=/archive
       - CONVERTER_ENGINE=dnglab
+      - CONVERTER_ENGINE_BIN=${CONVERTER_ENGINE_BIN:-}
+      - APPDATA_DIR=/appdata
       - EXIFTOOL_BIN=exiftool
       - FOLDER_SCHEMA=%Y/%m
       - FILE_PATTERN=IMG_{seq}
@@ -27,5 +29,7 @@ services:
       - /mnt/nas/photos/watch:/watch
       - /mnt/nas/photos/output:/output
       - /mnt/nas/photos/archive:/archive
+      # Optional: appdata for custom engines & config
+      # - /mnt/nas/photos/appdata:/appdata
     ports:
       - "8080:8080"

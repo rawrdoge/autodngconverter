@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -81,6 +82,33 @@ std::string shell_quote(const std::string& s) {
 #endif
 }
 
+// Resolve engine binary path using config precedence:
+// 1. CONVERTER_ENGINE_BIN (explicit override)
+// 2. {APPDATA_DIR}/engines/{engine_name}
+// 3. /usr/local/bin/{engine_name} (built-in)
+// 4. engine_name (PATH lookup)
+std::string ResolveEngineBinary(const Config& cfg, const std::string& engine_name) {
+    // 1. Explicit override via env
+    if (!cfg.converter_engine_bin.empty()) {
+        return cfg.converter_engine_bin;
+    }
+
+    // 2. Appdata engines dir
+    std::string candidate = cfg.appdata_dir + "/engines/" + engine_name;
+    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+        return candidate;
+    }
+
+    // 3. Built-in default
+    std::string builtin = "/usr/local/bin/" + engine_name;
+    if (std::filesystem::exists(builtin) && std::filesystem::is_regular_file(builtin)) {
+        return builtin;
+    }
+
+    // 4. Fallback to PATH lookup
+    return engine_name;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -140,16 +168,19 @@ private:
 // ---------------------------------------------------------------------------
 // Factories
 // ---------------------------------------------------------------------------
-ConverterEngine* MakeConverter(const std::string& engine_name) {
-    std::string e = engine_name.empty() ? "dnglab" : engine_name;
-    if (e == "dnglab") return new DnglabEngine("dnglab");
+ConverterEngine* MakeConverter(const Config& cfg) {
+    std::string engine_name = cfg.converter_engine.empty() ? "dnglab" : cfg.converter_engine;
+    std::string bin = ResolveEngineBinary(cfg, engine_name);
+    if (engine_name == "dnglab") return new DnglabEngine(bin);
     // stubs for adobedng / libraw
-    return new DnglabEngine("dnglab");
+    return new DnglabEngine(bin);
 }
 
-PreviewEmbedder* MakeEmbedder() {
+PreviewEmbedder* MakeEmbedder(const Config& cfg) {
+    std::string engine_name = cfg.converter_engine.empty() ? "dnglab" : cfg.converter_engine;
+    std::string bin = ResolveEngineBinary(cfg, engine_name);
     // dnglab first; exiftool is the fallback inside the embedder chain.
-    return new DnglabEmbedder("dnglab", "exiftool");
+    return new DnglabEmbedder(bin, cfg.exiftool_bin);
 }
 
 } // namespace rawimport

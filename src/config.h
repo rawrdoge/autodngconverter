@@ -24,6 +24,8 @@ struct Config {
     std::string folder_schema = "%Y/%m";
     std::string file_pattern = "IMG_{seq}";
     std::string converter_engine = "dnglab";
+    std::string converter_engine_bin;   // optional explicit binary path
+    std::string appdata_dir = "/appdata";
     std::string exiftool_bin = "exiftool";
 
     // Default conversion settings (PRD §9)

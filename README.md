@@ -18,10 +18,14 @@ cp .env.example .env
 #      - /your/watch/path:/watch
 #      - /your/output/path:/output
 #      - /your/archive/path:/archive
+#      # Optional: custom engines & config
+#      - /your/appdata/path:/appdata
 
 # 4. Run (published image, MariaDB 10.11+)
 docker compose up -d
 ```
+
+The published image (`ghcr.io/rawrdoge/autodngconverter:latest`) includes `dnglab` built-in. No manual downloads needed.
 
 ## Database Provisioning
 
@@ -55,7 +59,9 @@ All via environment variables (`.env`):
 | `ARCHIVE_DIR` | `/archive` | Container RAW archive |
 | `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
 | `FILE_PATTERN` | `IMG_{seq}` | Output filename |
-| `CONVERTER_ENGINE` | `dnglab` | Converter binary |
+| `CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`, `libraw`) |
+| `CONVERTER_ENGINE_BIN` | — | Optional: explicit binary path override |
+| `APPDATA_DIR` | `/appdata` | Appdata root for engines/config |
 | `EXIFTOOL_BIN` | `exiftool` | ExifTool path |
 | `POLL_INTERVAL` | `10` | Watcher poll seconds |
 | `LOG_LEVEL` | `info` | Log verbosity |
@@ -70,6 +76,39 @@ All via environment variables (`.env`):
 | `DEF_LINEAR` | `false` | Linear DNG flag |
 
 **Host paths** are configured in `docker-compose.yml` under `volumes:` (not in `.env`).
+
+### Engine Override (Appdata)
+
+The image includes `dnglab` at `/usr/local/bin/dnglab` (symlinked to `/appdata/engines/dnglab`).
+
+To use a custom engine build or future engine (Adobe DNG Converter, libraw):
+
+1. Uncomment the appdata volume in `docker-compose.yml`:
+   ```yaml
+   volumes:
+     - /mnt/nas/photos/watch:/watch
+     - /mnt/nas/photos/output:/output
+     - /mnt/nas/photos/archive:/archive
+     - /mnt/nas/photos/appdata:/appdata   # enable this
+   ```
+
+2. Place your engine binary at `/mnt/nas/photos/appdata/engines/{engine_name}` on the host:
+   ```bash
+   # Example: custom dnglab build
+   cp /path/to/custom/dnglab /mnt/nas/photos/appdata/engines/dnglab
+   chmod +x /mnt/nas/photos/appdata/engines/dnglab
+   ```
+
+3. Set `CONVERTER_ENGINE` in `.env` to match:
+   ```env
+   CONVERTER_ENGINE=dnglab   # or adobedng, libraw, etc.
+   ```
+
+**Resolution precedence**:
+1. `CONVERTER_ENGINE_BIN` (explicit path)
+2. `{APPDATA_DIR}/engines/{CONVERTER_ENGINE}`
+3. `/usr/local/bin/{CONVERTER_ENGINE}` (built-in)
+4. `PATH` lookup
 
 ## API
 

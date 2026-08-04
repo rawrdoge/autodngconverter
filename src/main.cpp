@@ -45,15 +45,17 @@ int main(int argc, char** argv) {
     ReconcileLibrary(cfg, store);
 
     // build engine + embedder
-    ConverterEngine* engine = MakeConverter(cfg.converter_engine);
+    ConverterEngine* engine = MakeConverter(cfg);
     if (engine && !engine->Available()) {
         SPDLOG_WARN("converter engine '{}' not available; conversions will fail",
                      engine->Name());
     }
 
+    PreviewEmbedder* embedder = MakeEmbedder(cfg);
+
     RotationManager rotation(cfg, store);
     ApiServer api(cfg, store, &rotation);
-    Worker worker(cfg, store, engine);
+    Worker worker(cfg, store, engine, embedder);
 
     // signal handling for graceful shutdown
     std::signal(SIGINT, on_signal);
