@@ -6,7 +6,8 @@
 # ============================================================
 # Stage 0: Build dnglab (Rust) from vibelabdng submodule
 # ============================================================
-FROM rust:1.78-bookworm AS dnglab-build
+# Edition 2024 + rawler 0.7.3 require Rust 1.89+
+FROM rust:1.89-bookworm AS dnglab-build
 WORKDIR /vibelabdng
 # Copy only what's needed for the build (leverage Docker layer cache)
 COPY vibelabdng/Cargo.toml vibelabdng/Cargo.lock ./
