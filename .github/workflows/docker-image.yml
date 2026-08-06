@@ -77,6 +77,8 @@ jobs:
           labels: ${{ steps.meta-ghcr.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHE_BUST=${{ github.sha }}
 
       - name: Build and push to Docker Hub
         if: ${{ env.DOCKERHUB_TOKEN != '' }}
@@ -88,3 +90,5 @@ jobs:
           labels: ${{ steps.meta-hub.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHE_BUST=${{ github.sha }}
