@@ -14,7 +14,16 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
-find_package(cxxopts REQUIRED)
+
+# cxxopts: header-only, use FetchContent (not available as system package in Debian bookworm)
+include(FetchContent)
+FetchContent_Declare(
+  cxxopts
+  GIT_REPOSITORY https://github.com/jarro2783/cxxopts
+  GIT_TAG v3.2.0
+)
+FetchContent_MakeAvailable(cxxopts)
+
 # MariaDB C connector (libmariadb-dev on Debian) provides libmariadb.so directly;
 # no CMake config package is shipped, so we link the bare library name.
 # The C API header (mysql.h) lives under an include subdir on Debian
