@@ -24,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake g++-12 pkg-config make \
     libssl-dev libmariadb-dev nlohmann-json3-dev libspdlog-dev \
     ca-certificates exiftool libexif12 \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

@@ -15,15 +15,6 @@ find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
 
-# cxxopts: header-only, use FetchContent (not available as system package in Debian bookworm)
-include(FetchContent)
-FetchContent_Declare(
-  cxxopts
-  GIT_REPOSITORY https://github.com/jarro2783/cxxopts
-  GIT_TAG v3.2.0
-)
-FetchContent_MakeAvailable(cxxopts)
-
 # MariaDB C connector (libmariadb-dev on Debian) provides libmariadb.so directly;
 # no CMake config package is shipped, so we link the bare library name.
 # The C API header (mysql.h) lives under an include subdir on Debian
@@ -45,14 +36,14 @@ add_executable(rawimport-pipeline
   src/metrics.cpp
 )
 
-target_include_directories(rawimport-pipeline PRIVATE src ${MARIADB_INCLUDE})
+# cxxopts: header-only, vendored at src/vendor/cxxopts.hpp
+target_include_directories(rawimport-pipeline PRIVATE src ${MARIADB_INCLUDE} ${CMAKE_CURRENT_SOURCE_DIR}/src/vendor)
 
 target_link_libraries(rawimport-pipeline PRIVATE
   OpenSSL::SSL
   OpenSSL::Crypto
   nlohmann_json::nlohmann_json
   spdlog::spdlog
-  cxxopts::cxxopts
   ${MARIADB_LIB}
 )
 
