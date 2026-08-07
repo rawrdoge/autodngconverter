@@ -2,6 +2,7 @@
 // converter.h — ConverterEngine interface for the RawImport C++ rewrite.
 // Phase 0 bootstrap (LEAD). See PRD_RawImport_Pipeline_CppRewrite.md §3.1, §6.2.
 #include <string>
+#include "config.h"
 #include "pipeline.h"
 
 namespace rawimport {
