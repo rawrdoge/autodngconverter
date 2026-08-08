@@ -28,16 +28,23 @@ Store::~Store() { Close(); }
 
 bool Store::Open(const Config& cfg) {
     p_->conn = mysql_init(nullptr);
-    if (!p_->conn) return false;
+    if (!p_->conn) {
+        SPDLOG_ERROR("[db] mysql_init failed");
+        return false;
+    }
     mysql_optionsv(p_->conn, MYSQL_SET_CHARSET_NAME, "utf8mb4");
+    SPDLOG_INFO("[db] connecting to {}@{}:{}/{}", cfg.db_user, cfg.db_host, cfg.db_port, cfg.db_name);
     for (int attempt = 0; attempt < 5; ++attempt) {
         if (mysql_real_connect(p_->conn, cfg.db_host.c_str(),
                                cfg.db_user.c_str(), cfg.db_password.c_str(),
                                cfg.db_name.c_str(), cfg.db_port, nullptr, 0)) {
+            SPDLOG_INFO("[db] connected successfully");
             return true;
         }
+        SPDLOG_WARN("[db] connection attempt {} failed: {}", attempt + 1, mysql_error(p_->conn));
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
+    SPDLOG_ERROR("[db] all connection attempts failed");
     return false;
 }
 
@@ -84,12 +91,35 @@ bool Store::Migrate(const std::string& migrations_dir) {
 }
 
 std::pair<int64_t, std::string> Store::AllocateSequence() {
-    if (mysql_query(p_->conn, "INSERT INTO sequences(name) VALUES('')") != 0)
+    // 1. Clean up any stale empty rows from previous crashes
+    if (mysql_query(p_->conn, "DELETE FROM sequences WHERE name = ''") != 0) {
+        SPDLOG_WARN("[db] cleanup stale empty sequence names failed: {}", mysql_error(p_->conn));
+    }
+
+    // 2. Use a unique temporary placeholder instead of ''
+    std::string tmp = "TMP_" + random_token();
+    std::string ins = "INSERT INTO sequences(name) VALUES('" + tmp + "')";
+    if (mysql_query(p_->conn, ins.c_str()) != 0) {
+        SPDLOG_ERROR("[db] sequence insert failed: {}", mysql_error(p_->conn));
         return {0, ""};
+    }
+
     int64_t id = static_cast<int64_t>(mysql_insert_id(p_->conn));
+    if (id == 0) {
+        SPDLOG_ERROR("[db] mysql_insert_id returned 0 after sequence insert");
+        return {0, ""};
+    }
+
     std::string name = "IMG_" + std::to_string(id);
     std::string upd = "UPDATE sequences SET name='" + name + "' WHERE id=" + std::to_string(id);
-    mysql_query(p_->conn, upd.c_str());
+    if (mysql_query(p_->conn, upd.c_str()) != 0) {
+        SPDLOG_ERROR("[db] sequence update failed: {}", mysql_error(p_->conn));
+        // Best-effort cleanup so we don't leak a stale TMP_ row
+        std::string del = "DELETE FROM sequences WHERE id=" + std::to_string(id);
+        mysql_query(p_->conn, del.c_str());
+        return {0, ""};
+    }
+    SPDLOG_DEBUG("[db] allocated sequence {} ({})", name, id);
     return {id, name};
 }
 

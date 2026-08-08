@@ -64,13 +64,17 @@ void Worker::PollLoop() {
             last_scan = now;
             std::error_code ec;
             if (fs::exists(cfg_.watch_dir, ec)) {
+                int scanned = 0, queued = 0;
                 for (const auto& e : fs::directory_iterator(cfg_.watch_dir, ec)) {
                     if (!e.is_regular_file()) continue;
+                    ++scanned;
                     std::string ext = e.path().extension().string();
                     for (char& c : ext) c = static_cast<char>(tolower(c));
                     if (ext != ".nrw" && ext != ".nef" && ext != ".cr2" && ext != ".arw")
                         continue;
                     std::string name = e.path().filename().string();
+                    // Skip DigiKam in-progress temp files
+                    if (name.find(".digikamtempfile.") != std::string::npos) continue;
                     if (name.size() >= 4 && (name.substr(name.size() - 4) == ".part" ||
                         name.substr(name.size() - 4) == ".tmp")) continue;
                     // debounce: skip if modified within debounce window
@@ -84,8 +88,15 @@ void Worker::PollLoop() {
                         p_->seen.insert(e.path().string());
                         p_->files.push(e.path().string());
                         p_->queue_depth.fetch_add(1);
+                        ++queued;
+                        SPDLOG_DEBUG("[worker] queued {}", e.path().string());
                     }
                 }
+                if (scanned > 0) {
+                    SPDLOG_DEBUG("[worker] scan complete: {} files scanned, {} queued, {} skipped", scanned, queued, scanned - queued);
+                }
+            } else {
+                SPDLOG_WARN("[worker] watch dir does not exist or not accessible: {} (err: {})", cfg_.watch_dir, ec.message());
             }
             p_->cv.notify_all();
         }

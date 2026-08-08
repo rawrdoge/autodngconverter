@@ -119,7 +119,7 @@ public:
     explicit DnglabEngine(std::string bin) : bin_(std::move(bin)) {}
     std::string Name() const override { return "dnglab"; }
     bool Available() const override {
-        std::string cmd = bin_ + " convert --help 2>nul";
+        std::string cmd = bin_ + " convert --help 2>/dev/null";
         return run_timed(cmd, 5000) >= 0;
     }
     bool Convert(const std::string& src, const std::string& dst,
@@ -145,7 +145,7 @@ public:
         : bin_(std::move(bin)), exif_(std::move(exif)) {}
     std::string Name() const override { return "dnglab"; }
     bool Available() const override {
-        std::string cmd = bin_ + " reembed --help 2>nul";
+        std::string cmd = bin_ + " reembed --help 2>/dev/null";
         return run_timed(cmd, 5000) >= 0;
     }
     bool Embed(const std::string& dng_path, const std::string& jpeg_path,

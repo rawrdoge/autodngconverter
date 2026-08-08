@@ -39,7 +39,7 @@ struct Config {
 
     // Watcher
     int poll_interval_sec = 10;
-    int debounce_sec = 2;
+    int debounce_sec = 10;
     int queue_size = 100;
 
     // Observability

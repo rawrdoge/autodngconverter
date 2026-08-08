@@ -30,6 +30,8 @@ int main(int argc, char** argv) {
 
     Config cfg = LoadConfig();
     SPDLOG_INFO("RawImport C++ starting (http_port={})", cfg.http_port);
+    SPDLOG_INFO("[main] config: watch_dir={}, output_dir={}, archive_dir={}, db_host={}, poll_interval={}s, debounce={}s",
+                cfg.watch_dir, cfg.output_dir, cfg.archive_dir, cfg.db_host, cfg.poll_interval_sec, cfg.debounce_sec);
 
     Store store;
     if (!store.Open(cfg)) {
@@ -40,18 +42,25 @@ int main(int argc, char** argv) {
         SPDLOG_ERROR("DB migrate failed; exiting");
         return 1;
     }
+    SPDLOG_INFO("[main] database migration complete");
 
     // reconcile existing library (legacy placeholders + sequence reserve)
     ReconcileLibrary(cfg, store);
+    SPDLOG_INFO("[main] library reconciliation complete");
 
     // build engine + embedder
     ConverterEngine* engine = MakeConverter(cfg);
     if (engine && !engine->Available()) {
         SPDLOG_WARN("converter engine '{}' not available; conversions will fail",
                      engine->Name());
+    } else if (engine) {
+        SPDLOG_INFO("[main] converter engine '{}' available", engine->Name());
     }
 
     PreviewEmbedder* embedder = MakeEmbedder(cfg);
+    if (embedder) {
+        SPDLOG_INFO("[main] preview embedder '{}' available", embedder->Name());
+    }
 
     RotationManager rotation(cfg, store);
     ApiServer api(cfg, store, &rotation);
@@ -62,7 +71,9 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     worker.Start();
+    SPDLOG_INFO("[main] worker started");
     api.Run();
+    SPDLOG_INFO("[main] API server running on port {}", cfg.http_port);
 
     SPDLOG_INFO("RawImport C++ running. Ctrl-C to stop.");
     while (!g_stop.load()) {
@@ -71,9 +82,13 @@ int main(int argc, char** argv) {
 
     SPDLOG_INFO("Shutting down...");
     api.Stop();
+    SPDLOG_INFO("[main] API server stopped");
     worker.Stop();
+    SPDLOG_INFO("[main] worker stopped");
     rotation.Stop();
+    SPDLOG_INFO("[main] rotation manager stopped");
     store.Close();
+    SPDLOG_INFO("[main] database connection closed");
     delete engine;
     SPDLOG_INFO("Done.");
     return 0;
