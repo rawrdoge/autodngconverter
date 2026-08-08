@@ -90,7 +90,7 @@ ExifResult extract_exif_date(const std::string& path, const std::string& exiftoo
     ExifResult r;
     r.source = DateSource::Mtime;
     std::string cmd = exiftool_bin + " -DateTimeOriginal -S -s " +
-                     "\"" + path + "\" 2>nul";
+                     "\"" + path + "\" > /dev/null";
     FILE* f = popen(cmd.c_str(), "r");
     if (f) {
         char line[256];
