@@ -1,6 +1,12 @@
 #include "pipeline.h"
 #include "util.h"
 
+#ifdef _WIN32
+#include <io.h>
+#define popen _popen
+#define pclose _pclose
+#endif
+
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -90,8 +96,13 @@ std::string sha256_file(const std::string& path) {
 ExifResult extract_exif_date(const std::string& path, const std::string& exiftool_bin) {
     ExifResult r;
     r.source = DateSource::Mtime;
+#ifdef _WIN32
+    const char* devnull = " > NUL";
+#else
+    const char* devnull = " > /dev/null";
+#endif
     std::string cmd = exiftool_bin + " -DateTimeOriginal -S -s " +
-                     "\"" + path + "\" > /dev/null";
+                     "\"" + path + "\"" + devnull;
     FILE* f = popen(cmd.c_str(), "r");
     if (f) {
         char line[256];

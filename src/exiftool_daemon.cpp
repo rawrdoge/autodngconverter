@@ -8,10 +8,17 @@
 #include <cstring>
 #include <filesystem>
 #include <spdlog/spdlog.h>
+#ifndef _WIN32
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 namespace rawimport {
 namespace fs = std::filesystem;
+
+#ifndef _WIN32
+// ---------------------------------------------------------------------
+// POSIX implementation (fork + pipes + waitpid)
+// ---------------------------------------------------------------------
 
 ExifToolDaemon::ExifToolDaemon(const std::string& exiftool_bin)
     : exiftool_bin_(exiftool_bin) {
@@ -244,7 +251,7 @@ void ExifToolDaemon::stop() {
     
     if (child_pid_ > 0) {
         int status;
-        waitpid(child_pid_, &status, 0);
+        waitpid(static_cast<pid_t>(child_pid_), &status, 0);
         child_pid_ = -1;
     }
     
@@ -252,5 +259,29 @@ void ExifToolDaemon::stop() {
         SPDLOG_INFO("[exiftool] daemon stopped");
     }
 }
+
+#else // _WIN32
+// ---------------------------------------------------------------------
+// Windows stub: fork/pipes/waitpid are POSIX-only, so the persistent
+// daemon is unavailable. healthy() reports false and extract_date()
+// delegates to the one-shot exiftool path (PRD §5.2 fallback), so all
+// Worker logic stays identical across platforms.
+// ---------------------------------------------------------------------
+
+ExifToolDaemon::ExifToolDaemon(const std::string& exiftool_bin)
+    : exiftool_bin_(exiftool_bin) {
+    SPDLOG_INFO("[exiftool] persistent daemon not supported on Windows; using one-shot exiftool");
+}
+
+ExifToolDaemon::~ExifToolDaemon() {}
+
+void ExifToolDaemon::stop() {}
+
+std::string ExifToolDaemon::send_command(const std::string&) { return ""; }
+
+ExifResult ExifToolDaemon::extract_date(const std::string& path) {
+    return extract_exif_date(path, exiftool_bin_);
+}
+#endif
 
 } // namespace rawimport

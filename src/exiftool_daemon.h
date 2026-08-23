@@ -2,6 +2,8 @@
 // exiftool_daemon.h — Persistent ExifTool subprocess for fast EXIF extraction.
 // Uses -stay_open -@ - protocol with plain text tag extraction.
 
+#include <cstdint>
+#include <cstdio>
 #include <string>
 #include <memory>
 #include <mutex>
@@ -37,7 +39,7 @@ private:
     int stdin_fd_ = -1;
     int stdout_fd_ = -1;
     FILE* stdout_f_ = nullptr;  // single long-lived buffered stream over stdout_fd_
-    pid_t child_pid_ = -1;
+    std::int64_t child_pid_ = -1;
     std::atomic<bool> running_{false};
     std::mutex mutex_;
     

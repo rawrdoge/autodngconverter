@@ -5,6 +5,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Static CRT to match vcpkg's x64-windows-static triplet (/MT).
+if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -19,7 +24,10 @@ find_package(spdlog REQUIRED)
 # no CMake config package is shipped, so we link the bare library name.
 # The C API header (mysql.h) lives under an include subdir on Debian
 # (e.g. /usr/include/mariadb), so locate and add it.
-find_library(MARIADB_LIB mariadb REQUIRED)
+find_library(MARIADB_LIB
+  NAMES mariadb libmariadb mariadbclient
+  PATH_SUFFIXES mariadb mysql
+  REQUIRED)
 find_path(MARIADB_INCLUDE NAMES mysql.h PATH_SUFFIXES mariadb mysql REQUIRED)
 
 add_executable(rawimport-pipeline
@@ -48,8 +56,20 @@ target_link_libraries(rawimport-pipeline PRIVATE
   ${MARIADB_LIB}
 )
 
+if(MSVC)
+  # libmariadb's SChannel TLS backend, Winsock, shell-path helper and zlib
+  # compression need these system/vcpkg libraries.
+  find_package(ZLIB REQUIRED)
+  target_link_libraries(rawimport-pipeline PRIVATE
+    secur32 ws2_32 crypt32 bcrypt advapi32 Shlwapi ZLIB::ZLIB)
+endif()
+
 # Warnings as errors for the integration build (ORCHESTRATION §7.5).
-target_compile_options(rawimport-pipeline PRIVATE -Wall -Wextra)
+if(MSVC)
+  target_compile_options(rawimport-pipeline PRIVATE /W4)
+else()
+  target_compile_options(rawimport-pipeline PRIVATE -Wall -Wextra)
+endif()
 
 # Migrations must be bundled into the runtime image (PRD §10 fix).
 install(DIRECTORY migrations DESTINATION /app)

@@ -8,10 +8,14 @@
 #include <fstream>
 #include <random>
 #include <sstream>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/sendfile.h>
+#else
+#include <windows.h>
+#endif
 
 namespace rawimport {
 namespace fs = std::filesystem;
@@ -87,6 +91,7 @@ std::string random_token() {
 std::string secure_random_token() {
     std::string s;
     s.resize(32);
+#ifndef _WIN32
     int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
     if (fd >= 0) {
         ssize_t n = read(fd, s.data(), s.size());
@@ -103,7 +108,8 @@ std::string secure_random_token() {
             return out;
         }
     }
-    // Fallback to random_device if /dev/urandom unavailable
+#endif
+    // Fallback to random_device if /dev/urandom unavailable (or on Windows)
     std::random_device rd;
     std::uniform_int_distribution<> d(0, 15);
     static const char* hex = "0123456789abcdef";
@@ -165,7 +171,16 @@ bool move_file(const std::string& from, const std::string& to) {
     std::error_code ec;
     fs::rename(from, to, ec);
     if (!ec) return true;
-    
+
+#ifdef _WIN32
+    // Cross-device fallback on Windows: CopyFileW (metadata-preserving) then
+    // delete source. Same-device rename above is atomic; this branch only
+    // runs across volumes.
+    BOOL ok = CopyFileA(from.c_str(), to.c_str(), FALSE);
+    if (!ok) return false;
+    fs::remove(from, ec);
+    return !ec;
+#else
     // Cross-device fallback: use copy_file_range or sendfile for efficiency
     int src_fd = open(from.c_str(), O_RDONLY | O_CLOEXEC);
     if (src_fd < 0) return false;
@@ -227,14 +242,23 @@ bool move_file(const std::string& from, const std::string& to) {
     
     fs::remove(from, ec);
     return !ec;
+#endif // !_WIN32
 }
 
 std::chrono::system_clock::time_point file_time_to_system(fs::file_time_type ft) {
-    // file_clock epoch (C++20 / libstdc++) is 2174-01-01 UTC, i.e. 74,510 days
-    // after the system epoch. Reinterpreting the raw duration without this
-    // offset shifts dates by ~204 years (2026 mtime -> "1822").
+    // file_clock epochs are implementation-defined and differ wildly:
+    //   libstdc++ (C++20): 2174-01-01 UTC -> 74,510 days after the Unix epoch
+    //     (naive reinterpretation shifted dates -204y: 2026 mtime -> "1822")
+    //   MSVC:              Windows FILETIME epoch, 1601-01-01 UTC
+    // GCC 12 lacks clock_cast, hence explicit arithmetic.
     using namespace std::chrono;
-    static constexpr auto kFileToSysOffset = duration_cast<system_clock::duration>(days{74510});
+#ifdef _WIN32
+    static constexpr auto kFileToSysOffset =
+        duration_cast<system_clock::duration>(seconds{INT64_C(-11644473600)});
+#else
+    static constexpr auto kFileToSysOffset =
+        duration_cast<system_clock::duration>(days{74510});
+#endif
     return system_clock::time_point(
         duration_cast<system_clock::duration>(ft.time_since_epoch()) + kFileToSysOffset);
 }
