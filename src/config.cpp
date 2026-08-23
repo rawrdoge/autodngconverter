@@ -76,7 +76,8 @@ Config LoadConfig() {
     c.def_jpeg_quality = env_int("DEF_JPEG_QUALITY", c.def_jpeg_quality);
     c.def_linear = env_bool("DEF_LINEAR", c.def_linear);
 
-    c.poll_interval_sec = env_int("POLL_INTERVAL_SEC", c.poll_interval_sec);
+    // Accept both spellings; POLL_INTERVAL is the documented name (.env.example/README).
+    c.poll_interval_sec = env_int("POLL_INTERVAL", env_int("POLL_INTERVAL_SEC", c.poll_interval_sec));
     c.debounce_sec = env_int("DEBOUNCE_SEC", c.debounce_sec);
     c.queue_size = env_int("QUEUE_SIZE", c.queue_size);
 
