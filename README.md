@@ -100,7 +100,7 @@ Re-convert body:
 
 ## Darktable Plugin
 
-Install `betterembeds.lua`, set `RAWIMPORT_API_URL` at top of script.
+Install `tools/betterembeds.lua` as a Darktable Lua script, set `RAWIMPORT_API_URL` near the top (base URL, no `/api/v1` suffix).
 
 ## Build (C++)
 
