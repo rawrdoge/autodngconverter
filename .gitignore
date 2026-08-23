@@ -37,3 +37,7 @@ legacy/
 
 # Claude
 CLAUDE.md
+
+# Windows native build
+build-win/
+vcpkg_installed/

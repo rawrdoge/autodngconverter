@@ -146,6 +146,17 @@ bool Store::Open(const Config& cfg) {
 
 bool Store::Migrate(const std::string& migrations_dir) {
     if (!p_->conn) return false;
+    {
+        // Guard against a missing migrations directory: directory_iterator
+        // throws an uncaught filesystem_error here otherwise (crash on
+        // Windows native runs where /db/migrations does not exist).
+        std::error_code ec;
+        if (!std::filesystem::exists(migrations_dir, ec) ||
+            !std::filesystem::is_directory(migrations_dir, ec)) {
+            SPDLOG_ERROR("[db] migrations dir not found: {}", migrations_dir);
+            return false;
+        }
+    }
     // ensure schema_migrations table
     mysql_query(p_->conn,
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
