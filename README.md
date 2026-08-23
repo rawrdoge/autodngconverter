@@ -22,9 +22,9 @@ FLUSH PRIVILEGES;
 
 ```yaml
 volumes:
-  - /your/watch/path:/watch
-  - /your/output/path:/output
-  - /your/archive/path:/archive
+  - /host/watch/path:/watch
+  - /host/output/path:/output
+  - /host/archive/path:/archive
 ```
 
 **4. Run**
