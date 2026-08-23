@@ -26,7 +26,7 @@ RUN mkdir -p build && cd build \
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 libmariadb3 libspdlog1.10 \
-    ca-certificates exiftool libexif12 \
+    ca-certificates exiftool libexif12 curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 10001 -m appuser
 
@@ -45,8 +45,9 @@ ENV ARCHIVE_DIR=/archive
 ENV DB_DIR=/db
 
 # Health check on the REST endpoint (PRD §8 GET /health)
+# Use /ready for readiness (checks DB), /health for liveness
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/ready || exit 1
 
 USER appuser
 EXPOSE 8080

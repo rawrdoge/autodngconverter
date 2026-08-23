@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "util.h"
 
 #include <array>
 #include <chrono>
@@ -110,11 +111,9 @@ ExifResult extract_exif_date(const std::string& path, const std::string& exiftoo
         std::error_code ec;
         auto ft = fs::last_write_time(path, ec);
         if (!ec) {
-            // GCC 12 libstdc++ lacks std::chrono::clock_cast; approximate by
-            // casting the file_clock duration to system_clock duration.
-            auto sys_tp = std::chrono::system_clock::time_point(
-                std::chrono::duration_cast<std::chrono::system_clock::duration>(
-                    ft.time_since_epoch()));
+            // GCC 12 libstdc++ lacks std::chrono::clock_cast; use the
+            // epoch-correct helper (file_clock epoch is 2174-01-01).
+            auto sys_tp = file_time_to_system(ft);
             auto tt = std::chrono::system_clock::to_time_t(sys_tp);
             std::tm tm{};
 #ifdef _WIN32
@@ -190,6 +189,50 @@ std::string extract_thumbnail(const std::string& dng_path, const std::string& ou
     out.write(reinterpret_cast<const char*>(data.data() + best_start),
               static_cast<std::streamsize>(best_len));
     return out_path;
+}
+
+// FNV-1a 64-bit hash (no external dependency).
+uint64_t fnv1a_64(const uint8_t* data, size_t len) {
+    uint64_t hash = 0xcbf29ce484222325ULL; // FNV offset basis
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= 0x100000001b3ULL; // FNV prime
+    }
+    return hash;
+}
+
+FastFingerprint compute_fast_fingerprint(const std::string& path) {
+    FastFingerprint fp;
+    std::error_code ec;
+    
+    // Get file size and mtime
+    auto status = fs::status(path, ec);
+    if (ec) return fp;
+    
+    fp.size = static_cast<uint64_t>(fs::file_size(path, ec));
+    if (ec) return fp;
+    
+    auto ft = fs::last_write_time(path, ec);
+    if (ec) return fp;
+    
+    // Convert file_time to seconds since epoch (epoch-correct conversion)
+    auto sys_tp = file_time_to_system(ft);
+    fp.mtime = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            sys_tp.time_since_epoch()).count());
+    
+    // Read first 4KB for FNV-1a hash
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return fp;
+    
+    std::array<uint8_t, 4096> buf{};
+    in.read(reinterpret_cast<char*>(buf.data()), buf.size());
+    std::streamsize n = in.gcount();
+    if (n > 0) {
+        fp.fnv1a_4k = fnv1a_64(buf.data(), static_cast<size_t>(n));
+    }
+    
+    return fp;
 }
 
 } // namespace rawimport

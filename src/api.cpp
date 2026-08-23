@@ -212,7 +212,21 @@ void handle(int fd, ApiServer::Impl* p) {
     Store& store = *p->store;
 
     if (method == "GET" && path == "/health") {
+        // Liveness probe (PRD §6.6 / action A9): process + HTTP server up.
+        // Intentionally does NOT touch the DB so a MariaDB blip doesn't make
+        // Docker restart the container (that's /ready's job).
         send_response(fd, 200, "{\"status\":\"ok\"}");
+        return;
+    }
+    if (method == "GET" && path == "/ready") {
+        // Readiness probe: DB connectivity verified cheaply via mysql_ping()
+        // on the existing store connection — no new connection per probe.
+        bool db_ok = p->store && p->store->Ping();
+        if (db_ok) {
+            send_response(fd, 200, "{\"status\":\"ready\",\"db\":\"ok\"}");
+        } else {
+            send_response(fd, 503, "{\"status\":\"not-ready\",\"db\":\"unavailable\"}");
+        }
         return;
     }
     if (method == "GET" && path == "/metrics") {

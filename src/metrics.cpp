@@ -42,6 +42,69 @@ void Metrics::set_db_size_bytes(int64_t bytes) {
     db_size_bytes_ = bytes;
 }
 
+void Metrics::observe_fast_fingerprint_duration(double seconds) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    static const double edges[] = {0.001,0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.5};
+    int b = 0;
+    while (b < 9 && seconds > edges[b]) ++b;
+    fp_bucket_[b] += 1;
+    fp_sum_ += seconds;
+    fp_count_ += 1;
+}
+
+void Metrics::observe_hash_duration(double seconds) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    static const double edges[] = {0.01,0.02,0.05,0.1,0.2,0.5,1,2,5};
+    int b = 0;
+    while (b < 9 && seconds > edges[b]) ++b;
+    hash_bucket_[b] += 1;
+    hash_sum_ += seconds;
+    hash_count_ += 1;
+}
+
+void Metrics::observe_exif_duration(double seconds) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    static const double edges[] = {0.01,0.02,0.05,0.1,0.2,0.5,1,2,5};
+    int b = 0;
+    while (b < 9 && seconds > edges[b]) ++b;
+    exif_bucket_[b] += 1;
+    exif_sum_ += seconds;
+    exif_count_ += 1;
+}
+
+void Metrics::observe_db_duration(double seconds) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    static const double edges[] = {0.001,0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.5};
+    int b = 0;
+    while (b < 9 && seconds > edges[b]) ++b;
+    db_bucket_[b] += 1;
+    db_sum_ += seconds;
+    db_count_ += 1;
+}
+
+void Metrics::observe_archive_duration(double seconds) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    static const double edges[] = {0.01,0.02,0.05,0.1,0.2,0.5,1,2,5};
+    int b = 0;
+    while (b < 9 && seconds > edges[b]) ++b;
+    arch_bucket_[b] += 1;
+    arch_sum_ += seconds;
+    arch_count_ += 1;
+}
+
+static void render_histogram(std::ostringstream& os, const char* name,
+                             const int64_t* buckets, double sum, int64_t count) {
+    os << "# TYPE " << name << " histogram\n";
+    static const char* le[] = {"1","2","5","10","20","30","60","120","300","+Inf"};
+    int64_t cum = 0;
+    for (int i = 0; i < 10; ++i) {
+        cum += buckets[i];
+        os << name << "_bucket{le=\"" << le[i] << "\"} " << cum << "\n";
+    }
+    os << name << "_sum " << sum << "\n";
+    os << name << "_count " << count << "\n";
+}
+
 std::string Metrics::Render() const {
     std::lock_guard<std::mutex> lk(mtx_);
     std::ostringstream os;
@@ -65,6 +128,14 @@ std::string Metrics::Render() const {
     os << "rawimport_queue_depth " << queue_depth_ << "\n";
     os << "# TYPE rawimport_db_size_bytes gauge\n";
     os << "rawimport_db_size_bytes " << db_size_bytes_ << "\n";
+    
+    // Per-stage histograms (bucket edges are baked into render_histogram)
+    render_histogram(os, "rawimport_fast_fingerprint_duration_seconds", fp_bucket_, fp_sum_, fp_count_);
+    render_histogram(os, "rawimport_hash_duration_seconds", hash_bucket_, hash_sum_, hash_count_);
+    render_histogram(os, "rawimport_exif_duration_seconds", exif_bucket_, exif_sum_, exif_count_);
+    render_histogram(os, "rawimport_db_duration_seconds", db_bucket_, db_sum_, db_count_);
+    render_histogram(os, "rawimport_archive_duration_seconds", arch_bucket_, arch_sum_, arch_count_);
+    
     return os.str();
 }
 

@@ -98,4 +98,22 @@ std::string build_folder_schema(const std::string& tmpl, const std::string& capt
 // fallback). Returns path to written sidecar or empty on failure.
 std::string extract_thumbnail(const std::string& dng_path, const std::string& out_path);
 
+// Fast fingerprint for two-stage duplicate detection.
+// (file_size, mtime, FNV-1a hash of first 4KB)
+struct FastFingerprint {
+    uint64_t size = 0;
+    uint64_t mtime = 0;  // seconds since epoch
+    uint64_t fnv1a_4k = 0;
+    
+    bool operator==(const FastFingerprint& other) const {
+        return size == other.size && mtime == other.mtime && fnv1a_4k == other.fnv1a_4k;
+    }
+};
+
+// Compute fast fingerprint (reads only first 4KB).
+FastFingerprint compute_fast_fingerprint(const std::string& path);
+
+// FNV-1a 64-bit hash.
+uint64_t fnv1a_64(const uint8_t* data, size_t len);
+
 } // namespace rawimport

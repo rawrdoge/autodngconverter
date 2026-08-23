@@ -80,6 +80,12 @@ Config LoadConfig() {
     c.debounce_sec = env_int("DEBOUNCE_SEC", c.debounce_sec);
     c.queue_size = env_int("QUEUE_SIZE", c.queue_size);
 
+    c.max_converter_workers = env_int("MAX_CONVERTER_WORKERS", c.max_converter_workers);
+    c.exiftool_daemon = env_bool("EXIFTOOL_DAEMON", c.exiftool_daemon);
+
+    c.dead_letter_max_retries = env_int("DEAD_LETTER_MAX_RETRIES", c.dead_letter_max_retries);
+    c.fast_fingerprint = env_bool("FAST_FINGERPRINT", c.fast_fingerprint);
+
     c.alert_push_url = env_or("ALERT_PUSH_URL", c.alert_push_url);
     c.http_port = env_int("HTTP_PORT", c.http_port);
 

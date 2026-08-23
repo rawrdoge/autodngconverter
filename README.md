@@ -64,6 +64,10 @@ All via environment variables (`.env`):
 | `APPDATA_DIR` | `/appdata` | Appdata root for engines/config |
 | `EXIFTOOL_BIN` | `exiftool` | ExifTool path |
 | `POLL_INTERVAL` | `10` | Watcher poll seconds |
+| `MAX_CONVERTER_WORKERS` | `0` | Parallel dnglab workers (0 = auto = CPU count, capped at 8; forced to 1 for `adobedng`) |
+| `EXIFTOOL_DAEMON` | `true` | Persistent exiftool subprocess for EXIF extraction |
+| `DEAD_LETTER_MAX_RETRIES` | `3` | Consecutive failures before a file moves to `/archive/failed/` |
+| `FAST_FINGERPRINT` | `true` | Skip full SHA-256 when size+mtime+first-4KB fingerprint is unchanged |
 | `LOG_LEVEL` | `info` | Log verbosity |
 | `PORT` | `8080` | API port |
 | `API_TOKEN` | — | Optional bearer token |

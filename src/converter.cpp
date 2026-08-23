@@ -119,15 +119,17 @@ public:
     explicit DnglabEngine(std::string bin) : bin_(std::move(bin)) {}
     std::string Name() const override { return "dnglab"; }
     bool Available() const override {
-        std::string cmd = bin_ + " convert --help >/dev/null";
+        std::string cmd = bin_ + " convert --help >/dev/null 2>&1";
         return run_timed(cmd, 5000) >= 0;
     }
     bool Convert(const std::string& src, const std::string& dst,
                  const ConversionSettings& s) override {
         std::string comp = s.compression;
         if (comp != "lossless" && comp != "uncompressed") comp = "lossless";
-        std::string cmd = bin_ + " convert --input " + shell_quote(src) +
-            " --output " + shell_quote(dst) + " -c " + comp +
+        // dnglab CLI takes positional <INPUT> <OUTPUT> (older --input/--output
+        // flags were removed; confirmed against dnglab 0.7.x convert --help).
+        std::string cmd = bin_ + " convert " + shell_quote(src) + " " +
+            shell_quote(dst) + " -c " + comp +
             " --keep-mtime true -f";
         int r = run_timed(cmd, 300000);
         return r == 0;
@@ -145,7 +147,7 @@ public:
         : bin_(std::move(bin)), exif_(std::move(exif)) {}
     std::string Name() const override { return "dnglab"; }
     bool Available() const override {
-        std::string cmd = bin_ + " reembed --help >/dev/null";
+        std::string cmd = bin_ + " reembed --help >/dev/null 2>&1";
         return run_timed(cmd, 5000) >= 0;
     }
     bool Embed(const std::string& dng_path, const std::string& jpeg_path,

@@ -34,6 +34,7 @@ add_executable(rawimport-pipeline
   src/api.cpp
   src/worker.cpp
   src/metrics.cpp
+  src/exiftool_daemon.cpp
 )
 
 # cxxopts: header-only, vendored at src/vendor/cxxopts.hpp

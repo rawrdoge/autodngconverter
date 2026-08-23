@@ -17,6 +17,13 @@ public:
     void observe_conversion_duration(double seconds);
     void set_queue_depth(int64_t depth);
     void set_db_size_bytes(int64_t bytes);
+    
+    // Per-stage duration histograms (seconds)
+    void observe_fast_fingerprint_duration(double seconds);
+    void observe_hash_duration(double seconds);
+    void observe_exif_duration(double seconds);
+    void observe_db_duration(double seconds);
+    void observe_archive_duration(double seconds);
 
     // Render in Prometheus text exposition format.
     std::string Render() const;
@@ -34,6 +41,27 @@ private:
     int64_t dur_count_ = 0;
     int64_t queue_depth_ = 0;
     int64_t db_size_bytes_ = 0;
+    
+    // Per-stage histograms
+    int64_t fp_bucket_[10] = {0,0,0,0,0,0,0,0,0,0};
+    double fp_sum_ = 0;
+    int64_t fp_count_ = 0;
+    
+    int64_t hash_bucket_[10] = {0,0,0,0,0,0,0,0,0,0};
+    double hash_sum_ = 0;
+    int64_t hash_count_ = 0;
+    
+    int64_t exif_bucket_[10] = {0,0,0,0,0,0,0,0,0,0};
+    double exif_sum_ = 0;
+    int64_t exif_count_ = 0;
+    
+    int64_t db_bucket_[10] = {0,0,0,0,0,0,0,0,0,0};
+    double db_sum_ = 0;
+    int64_t db_count_ = 0;
+    
+    int64_t arch_bucket_[10] = {0,0,0,0,0,0,0,0,0,0};
+    double arch_sum_ = 0;
+    int64_t arch_count_ = 0;
 };
 
 } // namespace rawimport

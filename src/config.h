@@ -42,6 +42,14 @@ struct Config {
     int debounce_sec = 10;
     int queue_size = 100;
 
+    // Performance
+    int max_converter_workers = 0;  // 0 = auto (hardware_concurrency)
+    bool exiftool_daemon = true;    // use persistent exiftool subprocess
+
+    // Reliability
+    int dead_letter_max_retries = 3;
+    bool fast_fingerprint = true;   // two-stage dedup gate before full SHA-256 (PRD §5.3)
+
     // Observability
     std::string alert_push_url;   // optional ntfy/Gotify
     int http_port = 8080;

@@ -6,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include <memory>
+#include <mysql.h>
 #include "pipeline.h"
 #include "config.h"
 
@@ -15,6 +16,9 @@ namespace rawimport {
 class Store {
 public:
     Store();
+    // Adopt an externally created connection (per-worker connections, PRD §7.1).
+    // Does not require Open(); the destructor releases the connection via Close().
+    explicit Store(MYSQL* adopted_conn);
     ~Store();
 
     // Open + ping-retry connection. Returns false on failure.
@@ -62,6 +66,11 @@ public:
     bool ReleaseLock(int64_t import_id);
     bool HasOutputHash(const std::string& hash);
 
+    // Insert an alert row. Reuses the existing alerts table (amendment
+    // ruling #3 — no new table). ref_sequence is optional (empty = NULL-less '').
+    bool InsertAlert(const std::string& severity, const std::string& category,
+                     const std::string& message, const std::string& ref_sequence = "");
+
     // Stats for /api/v1/stats.
     struct Stats {
         int64_t total = 0;
@@ -77,6 +86,13 @@ public:
                                           const std::string& camera_filter);
 
     void Close();
+
+    // Cheap DB connectivity probe (mysql_ping). Used by GET /ready.
+    bool Ping();
+
+    // Create a new independent connection for worker threads.
+    // Caller owns the returned MYSQL* and must mysql_close() it.
+    static MYSQL* CreateConnection(const Config& cfg);
 
 private:
     struct Impl;
