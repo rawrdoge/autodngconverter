@@ -21,7 +21,7 @@ mariadb.zip
 dnglab/
 
 # CI log dumps
-logs_*/
+logs_*
 
 # Local Cline memory bank (not project source, never pushed to prod)
 memory-bank/
