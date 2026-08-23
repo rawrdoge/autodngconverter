@@ -53,8 +53,9 @@ bool ReconcileLibrary(const Config& cfg, Store& store) {
             rec.orientation = 0;
             rec.created_at = "";
             rec.completed_at = "";
-            store.InsertImport(rec);
-            ++inserted;
+            // Count only successful inserts — InsertImport returns 0 on
+            // failure (D22: failures were previously reported as inserted).
+            if (store.InsertImport(rec) != 0) ++inserted;
         }
     };
 

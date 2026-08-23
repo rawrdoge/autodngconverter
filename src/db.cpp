@@ -267,14 +267,16 @@ std::pair<int64_t, std::string> Store::AllocateSequence() {
 }
 
 int64_t Store::InsertImport(const ImportRecord& rec) {
+    // status is bound (not hardcoded 'completed') so reconcile legacy
+    // placeholders and failed imports persist their true status (D23).
     PreparedStatement stmt(p_->conn,
         "INSERT INTO imports (sequence_id, source_path, source_hash, output_path, "
         "output_hash, camera_model, capture_date, capture_time, folder_schema, "
         "conversion_settings, status, orientation, created_at, completed_at) VALUES ("
-        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, NOW(), NOW())");
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())");
     if (!stmt.valid()) return 0;
     
-    MYSQL_BIND bind[11] = {};
+    MYSQL_BIND bind[12] = {};
     
     // sequence_id
     bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
@@ -305,15 +307,24 @@ int64_t Store::InsertImport(const ImportRecord& rec) {
     bind[5].buffer = const_cast<char*>(rec.camera_model.c_str());
     bind[5].buffer_length = rec.camera_model.size();
     
+    // capture_date / capture_time (DATE / TIME columns, nullable).
+    // Empty values must bind as SQL NULL — an empty string is rejected by
+    // strict mode ("Incorrect date value: ''"), which silently dropped all
+    // reconcile legacy placeholders (D22).
+    my_bool date_null = rec.capture_date.empty() ? 1 : 0;
+    my_bool time_null = rec.capture_time.empty() ? 1 : 0;
+    
     // capture_date
     bind[6].buffer_type = MYSQL_TYPE_STRING;
     bind[6].buffer = const_cast<char*>(rec.capture_date.c_str());
-    bind[6].buffer_length = rec.capture_date.size();
+    bind[6].buffer_length = static_cast<unsigned long>(rec.capture_date.size());
+    bind[6].is_null = &date_null;
     
     // capture_time
     bind[7].buffer_type = MYSQL_TYPE_STRING;
     bind[7].buffer = const_cast<char*>(rec.capture_time.c_str());
-    bind[7].buffer_length = rec.capture_time.size();
+    bind[7].buffer_length = static_cast<unsigned long>(rec.capture_time.size());
+    bind[7].is_null = &time_null;
     
     // folder_schema
     bind[8].buffer_type = MYSQL_TYPE_STRING;
@@ -325,11 +336,17 @@ int64_t Store::InsertImport(const ImportRecord& rec) {
     bind[9].buffer = const_cast<char*>(rec.conversion_settings.c_str());
     bind[9].buffer_length = rec.conversion_settings.size();
     
-    // orientation
-    bind[10].buffer_type = MYSQL_TYPE_LONG;
-    bind[10].buffer = const_cast<int*>(&rec.orientation);
+    // status (bound — see D23 note above)
+    const std::string status_str = to_string(rec.status);
+    bind[10].buffer_type = MYSQL_TYPE_STRING;
+    bind[10].buffer = const_cast<char*>(status_str.c_str());
+    bind[10].buffer_length = static_cast<unsigned long>(status_str.size());
     
-    if (!stmt.bind_param(bind, 11) || !stmt.execute()) {
+    // orientation
+    bind[11].buffer_type = MYSQL_TYPE_LONG;
+    bind[11].buffer = const_cast<int*>(&rec.orientation);
+    
+    if (!stmt.bind_param(bind, 12) || !stmt.execute()) {
         return 0;
     }
     
