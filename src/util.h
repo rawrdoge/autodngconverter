@@ -31,9 +31,6 @@ bool move_file(const std::string& from, const std::string& to);
 // Ensure a directory exists (mkdir -p). Returns true on success/exist.
 bool ensure_dir(const std::string& path);
 
-// Touch a file's mtime (used for digiKam watch rescan). Returns true on success.
-bool touch_mtime(const std::string& path);
-
 // Generate a random short token (for non-security temp filenames).
 std::string random_token();
 

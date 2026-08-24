@@ -18,7 +18,6 @@ struct ConversionSettings {
     std::string version = "1.4";            // dng version
     int jpeg_quality = 92;
     bool linear = false;
-    std::string seed;                        // re-embed determinism only
 };
 
 enum class ImportStatus {
@@ -44,7 +43,7 @@ inline const char* to_string(ImportStatus s) {
 
 enum class DateSource { Exif, Mtime };
 
-// Atomic import record (mirrors Go `ImportRecord` / DB `imports` row).
+// Atomic import record (mirrors the DB `imports` row).
 struct ImportRecord {
     int64_t id = 0;
     int64_t sequence_id = 0;
@@ -64,20 +63,6 @@ struct ImportRecord {
     std::string completed_at;
     std::string error_message;
     std::string sequence_name;   // IMG_{n}
-};
-
-// Re-conversion job (mirrors Go `ReconversionJob`).
-struct ReconversionJob {
-    int64_t id = 0;
-    int64_t import_id = 0;
-    std::string previous_output_hash;
-    std::string new_output_hash;
-    ConversionSettings settings;
-    std::string reason;
-    std::string triggered_at;
-    std::string completed_at;
-    ImportStatus status = ImportStatus::Pending; // pending|running|completed|failed
-    std::string error_message;
 };
 
 // Compute SHA-256 hex of a file (OpenSSL EVP_sha256). Returns empty on error.

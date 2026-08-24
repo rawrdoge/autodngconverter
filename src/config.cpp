@@ -1,20 +1,29 @@
-// config.cpp - environment-driven configuration loading for the RawImport C++ rewrite.
-// Phase 0 bootstrap (LEAD). See PRD_RawImport_Pipeline_CppRewrite.md section 9.
-#include <cstdlib>
-#include <string>
-#include <algorithm>
+// config.cpp - environment-driven configuration loading for the portable build.
+// Env vars only; no INI parser (action plan §5 Phase 2).
 #include "config.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <limits.h>
+#include <unistd.h>
+#endif
 
 namespace rawimport {
 
 namespace {
 
 std::string trim(const std::string& s) {
-    auto is_space = [](unsigned char c) { return std::isspace(c); };
-    auto begin = std::find_if_not(s.begin(), s.end(), is_space);
-    if (begin == s.end()) return {};
-    auto end = std::find_if_not(s.rbegin(), s.rend(), is_space).base();
-    return std::string(begin, end);
+    size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return s.substr(a, b - a);
 }
 
 std::string env_or(const char* name, const std::string& def) {
@@ -45,58 +54,84 @@ int env_int(const char* name, int def) {
     }
 }
 
+std::string exe_directory() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {0};
+    DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        return std::filesystem::path(std::string(buf, n)).parent_path().string();
+    }
+#else
+    char buf[PATH_MAX] = {0};
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        return std::filesystem::path(std::string(buf, static_cast<size_t>(n)))
+            .parent_path()
+            .string();
+    }
+#endif
+    return ".";
+}
+
 } // anonymous namespace
+
+std::string get_portable_root() {
+    // 1. RAWIMPORT_HOME explicit override.
+    const char* home = std::getenv("RAWIMPORT_HOME");
+    if (home && home[0]) return trim(std::string(home));
+    // 2. Directory containing the executable (true portable mode).
+    return exe_directory();
+}
+
+// Resolve an external tool binary (action plan §5 Phase 3):
+// 1. Explicit env override (CONVERTER_ENGINE_BIN / EXIFTOOL_BIN)
+// 2. <root>/tools/<name> or <root>/tools/<name>.exe
+// 3. PATH lookup (bare name)
+std::string resolve_tool(const std::string& override_path, const std::string& root,
+                         const std::string& name) {
+    namespace fs = std::filesystem;
+    if (!override_path.empty()) return override_path;
+    for (const char* suffix : {"", ".exe"}) {
+        fs::path candidate =
+            fs::path(root) / "tools" / (name + suffix);
+        std::error_code ec;
+        if (fs::is_regular_file(candidate, ec)) return candidate.string();
+    }
+    return name;  // bare name -> PATH lookup
+}
 
 Config LoadConfig() {
     Config c;
+    c.root = get_portable_root();
 
-    c.db_host = env_or("DB_HOST", c.db_host);
-    c.db_port = env_int("DB_PORT", c.db_port);
-    c.db_user = env_or("DB_USER", c.db_user);
-    c.db_password = env_or("DB_PASSWORD", c.db_password);
-    c.db_name = env_or("DB_NAME", c.db_name);
-
-    c.watch_dir = env_or("WATCH_DIR", c.watch_dir);
-    c.output_dir = env_or("OUTPUT_DIR", c.output_dir);
-    c.archive_dir = env_or("ARCHIVE_DIR", c.archive_dir);
-    c.db_dir = env_or("DB_DIR", c.db_dir);
+    // Auto-folder defaults under the portable root (action plan §5 Phase 2).
+    c.watch_dir = env_or("WATCH_DIR", c.root + "/watch");
+    c.output_dir = env_or("OUTPUT_DIR", c.root + "/output");
+    c.archive_dir = env_or("ARCHIVE_DIR", c.root + "/archive");
+    c.db_name = env_or("DB_NAME", c.root + "/data/rawimport.db");
+    // db_host / db_port / db_user / db_password are intentionally absent:
+    // SQLite needs no server.
 
     c.folder_schema = env_or("FOLDER_SCHEMA", c.folder_schema);
     c.file_pattern = env_or("FILE_PATTERN", c.file_pattern);
-    c.converter_engine = env_or("CONVERTER_ENGINE", c.converter_engine);
-    c.converter_engine_bin = env_or("CONVERTER_ENGINE_BIN", c.converter_engine_bin);
-    c.appdata_dir = env_or("APPDATA_DIR", c.appdata_dir);
-    c.exiftool_bin = env_or("EXIFTOOL_BIN", c.exiftool_bin);
+
+    // Tool resolution (action plan §5 Phase 3): no downloader, bundled binaries.
+    c.converter_engine_bin = resolve_tool(env_or("CONVERTER_ENGINE_BIN", ""), c.root, "dnglab");
+    c.exiftool_bin = resolve_tool(env_or("EXIFTOOL_BIN", ""), c.root, "exiftool");
 
     c.gen_thumb_jpeg = env_bool("GEN_THUMB_JPEG", c.gen_thumb_jpeg);
     c.def_compression = env_or("DEF_COMPRESSION", c.def_compression);
-    c.def_dng_version = env_or("DEF_DNG_VERSION", c.def_dng_version);
-    c.def_preview_medium = env_or("DEF_PREVIEW_MEDIUM", c.def_preview_medium);
-    c.def_preview_full = env_or("DEF_PREVIEW_FULL", c.def_preview_full);
-    c.def_jpeg_quality = env_int("DEF_JPEG_QUALITY", c.def_jpeg_quality);
-    c.def_linear = env_bool("DEF_LINEAR", c.def_linear);
 
-    // Accept both spellings; POLL_INTERVAL is the documented name (.env.example/README).
+    // Accept both spellings; POLL_INTERVAL is the documented name.
     c.poll_interval_sec = env_int("POLL_INTERVAL", env_int("POLL_INTERVAL_SEC", c.poll_interval_sec));
     c.debounce_sec = env_int("DEBOUNCE_SEC", c.debounce_sec);
     c.queue_size = env_int("QUEUE_SIZE", c.queue_size);
 
     c.max_converter_workers = env_int("MAX_CONVERTER_WORKERS", c.max_converter_workers);
-    c.exiftool_daemon = env_bool("EXIFTOOL_DAEMON", c.exiftool_daemon);
-
     c.dead_letter_max_retries = env_int("DEAD_LETTER_MAX_RETRIES", c.dead_letter_max_retries);
     c.fast_fingerprint = env_bool("FAST_FINGERPRINT", c.fast_fingerprint);
 
-    c.alert_push_url = env_or("ALERT_PUSH_URL", c.alert_push_url);
     c.http_port = env_int("HTTP_PORT", c.http_port);
-
-    c.rotation_grace_ms = env_int("ROTATION_GRACE_MS", c.rotation_grace_ms);
-    c.rotation_mode = env_or("ROTATION_MODE", c.rotation_mode);
-    c.immich_url = env_or("IMMICH_URL", c.immich_url);
-    c.immich_token = env_or("IMMICH_TOKEN", c.immich_token);
-    c.digikam_rescan = env_or("DIGIKAM_RESCAN", c.digikam_rescan);
-
-    c.api_token = env_or("API_TOKEN", c.api_token);
 
     return c;
 }

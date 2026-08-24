@@ -1,34 +1,42 @@
 #pragma once
-// db.h — MariaDB store interface for the RawImport C++ rewrite.
-// Phase 0 bootstrap (LEAD). See PRD_RawImport_Pipeline_CppRewrite.md §3.4, §7.
+// db.h — SQLite store interface for the RawImport portable branch (v2.1.0-portable).
+// Replaces the MariaDB-backed store: local WAL-mode DB file, zero external infra.
+// Feature subset per ACTION_PLAN_Portable_Layman_Binary_v2.1.0.md §4:
+// no rotation sync, reconversions, preview edits, alerts, or path lookups.
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <optional>
 #include <memory>
-#include <mysql.h>
+
+struct sqlite3;
+
 #include "pipeline.h"
 #include "config.h"
 
 namespace rawimport {
 
-// Thin MariaDB-backed store.
+// Thin SQLite-backed store. Each thread owns its own connection
+// (CreateConnection + adopted-ctor), all pointing at the same WAL DB file.
 class Store {
 public:
     Store();
-    // Adopt an externally created connection (per-worker connections, PRD §7.1).
-    // Does not require Open(); the destructor releases the connection via Close().
-    explicit Store(MYSQL* adopted_conn);
+    // Adopt an externally created connection (per-worker connections).
+    // Does not require Open(); the destructor releases it via Close().
+    explicit Store(sqlite3* adopted_db);
     ~Store();
 
-    // Open + ping-retry connection. Returns false on failure.
+    // Open (creating the DB file and its parent dirs if needed) + apply
+    // pragmas: journal_mode=WAL, busy_timeout=5000, foreign_keys=ON.
     bool Open(const Config& cfg);
 
-    // Apply pending migrations from the migrations/ directory (idempotent).
-    bool Migrate(const std::string& migrations_dir);
+    // Apply the embedded schema (idempotent; mirrors migrations/0001_init_sqlite.sql,
+    // which is compiled into the binary so the release ZIP needs no migrations dir).
+    bool Migrate();
 
-    // Allocate a monotonic sequence id (AUTO_INCREMENT + LAST_INSERT_ID()).
-    // Returns (id, "IMG_{id}").
+    // Allocate a monotonic sequence id (BEGIN IMMEDIATE + AUTOINCREMENT +
+    // last_insert_rowid; SQLite's writer lock guarantees monotonicity).
+    // Returns (id, "IMG_{id}"); (0, "") on failure.
     std::pair<int64_t, std::string> AllocateSequence();
 
     // Insert a completed import atomically. Returns new row id (0 on failure).
@@ -36,40 +44,8 @@ public:
 
     // Lookup by sequence name (IMG_{n}).
     std::optional<ImportRecord> GetImportBySequence(const std::string& seq);
-    // Lookup by primary row id (imports.id). Used by reconvert (L1 fix).
-    std::optional<ImportRecord> GetImportById(int64_t id);
-    // Lookup by source or output SHA-256.
+    // Lookup by source OR output SHA-256 (dedup gate).
     std::optional<ImportRecord> GetImportByHash(const std::string& sha);
-    // Lookup by source file path (used by Lua re-embed resolution).
-    std::optional<ImportRecord> GetImportBySourcePath(const std::string& path);
-    // Lookup by output DNG path (used by preview-updated hash sync, PRD §3.2).
-    std::optional<ImportRecord> GetImportByOutputPath(const std::string& path);
-
-    // Update output hash after re-embed (preview-updated notify).
-    bool UpdateOutputHash(int64_t id, const std::string& new_hash);
-
-    // Update agreed EXIF orientation (rotation sync). PRD §5.
-    bool UpdateOrientation(int64_t id, int orientation);
-
-    // Record a preview re-embed audit row.
-    bool RecordPreviewEdit(int64_t import_id, const std::string& worker,
-                           const std::string& prev_hash, const std::string& new_hash,
-                           int width, int height, int quality);
-
-    // Insert a reconversion job; returns new id.
-    int64_t InsertReconversion(int64_t import_id, const ReconversionJob& job);
-    bool UpdateReconversion(int64_t id, const std::string& new_hash, ImportStatus status);
-
-    // ---- processing_locks (serialization for reconvert/re-embed/rotation) ----
-    // Returns true if lock acquired (or already held by same worker within TTL).
-    bool AcquireLock(int64_t import_id, const std::string& worker_id, int ttl_sec);
-    bool ReleaseLock(int64_t import_id);
-    bool HasOutputHash(const std::string& hash);
-
-    // Insert an alert row. Reuses the existing alerts table (amendment
-    // ruling #3 — no new table). ref_sequence is optional (empty = NULL-less '').
-    bool InsertAlert(const std::string& severity, const std::string& category,
-                     const std::string& message, const std::string& ref_sequence = "");
 
     // Stats for /api/v1/stats.
     struct Stats {
@@ -87,12 +63,12 @@ public:
 
     void Close();
 
-    // Cheap DB connectivity probe (mysql_ping). Used by GET /ready.
+    // Cheap DB connectivity probe. Used by GET /ready.
     bool Ping();
 
     // Create a new independent connection for worker threads.
-    // Caller owns the returned MYSQL* and must mysql_close() it.
-    static MYSQL* CreateConnection(const Config& cfg);
+    // Caller owns the returned handle; pass it to Store(sqlite3*) which closes it.
+    static sqlite3* CreateConnection(const Config& cfg);
 
 private:
     struct Impl;

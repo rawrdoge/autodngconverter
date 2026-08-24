@@ -1,12 +1,10 @@
 {
   "name": "rawimport-pipeline",
-  "version-string": "2.0.5",
-  "description": "RawImport RAW->DNG pipeline (Windows build dependencies)",
+  "version-string": "2.1.0-portable",
+  "description": "RawImport RAW->DNG pipeline, portable SQLite build (Windows dependencies)",
   "dependencies": [
     "openssl",
-    "nlohmann-json",
     "spdlog",
-    "libmariadb",
-    "zlib"
+    "sqlite3"
   ]
 }

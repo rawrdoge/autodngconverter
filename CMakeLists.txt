@@ -14,21 +14,11 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Dependencies (pinned per ORCHESTRATION_CppRewrite.md §2 / PRD §6.2).
-# Package names follow Debian bookworm / vcpkg conventions.
-find_package(OpenSSL REQUIRED)
-find_package(nlohmann_json REQUIRED)
+# Portable-branch dependencies (v2.1.0-portable):
+# SQLite replaces MariaDB entirely — no libmariadb, no external DB server.
+find_package(OpenSSL REQUIRED)   # SHA-256 (EVP)
 find_package(spdlog REQUIRED)
-
-# MariaDB C connector (libmariadb-dev on Debian) provides libmariadb.so directly;
-# no CMake config package is shipped, so we link the bare library name.
-# The C API header (mysql.h) lives under an include subdir on Debian
-# (e.g. /usr/include/mariadb), so locate and add it.
-find_library(MARIADB_LIB
-  NAMES mariadb libmariadb mariadbclient
-  PATH_SUFFIXES mariadb mysql
-  REQUIRED)
-find_path(MARIADB_INCLUDE NAMES mysql.h PATH_SUFFIXES mariadb mysql REQUIRED)
+find_package(SQLite3 REQUIRED)
 
 add_executable(rawimport-pipeline
   src/main.cpp
@@ -37,31 +27,23 @@ add_executable(rawimport-pipeline
   src/db.cpp
   src/pipeline.cpp
   src/converter.cpp
-  src/rotation.cpp
-  src/reconcile.cpp
   src/api.cpp
   src/worker.cpp
   src/metrics.cpp
-  src/exiftool_daemon.cpp
 )
 
-# cxxopts: header-only, vendored at src/vendor/cxxopts.hpp
-target_include_directories(rawimport-pipeline PRIVATE src ${MARIADB_INCLUDE} ${CMAKE_CURRENT_SOURCE_DIR}/src/vendor)
+target_include_directories(rawimport-pipeline PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR}/src/vendor)
 
 target_link_libraries(rawimport-pipeline PRIVATE
   OpenSSL::SSL
   OpenSSL::Crypto
-  nlohmann_json::nlohmann_json
   spdlog::spdlog
-  ${MARIADB_LIB}
+  SQLite::SQLite3
 )
 
 if(MSVC)
-  # libmariadb's SChannel TLS backend, Winsock, shell-path helper and zlib
-  # compression need these system/vcpkg libraries.
-  find_package(ZLIB REQUIRED)
-  target_link_libraries(rawimport-pipeline PRIVATE
-    secur32 ws2_32 crypt32 bcrypt advapi32 Shlwapi ZLIB::ZLIB)
+  # Winsock for the REST API listener.
+  target_link_libraries(rawimport-pipeline PRIVATE ws2_32)
 endif()
 
 # Warnings as errors for the integration build (ORCHESTRATION §7.5).
@@ -71,6 +53,4 @@ else()
   target_compile_options(rawimport-pipeline PRIVATE -Wall -Wextra)
 endif()
 
-# Migrations must be bundled into the runtime image (PRD §10 fix).
-install(DIRECTORY migrations DESTINATION /app)
 install(TARGETS rawimport-pipeline DESTINATION /usr/local/bin)

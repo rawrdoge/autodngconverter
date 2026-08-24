@@ -1,7 +1,6 @@
 #include "api.h"
 #include "config.h"
 #include "db.h"
-#include "rotation.h"
 #include "pipeline.h"
 #include "metrics.h"
 
@@ -32,15 +31,13 @@ struct ApiServer::Impl {
     std::atomic<bool> stop{false};
     const Config* cfg = nullptr;
     Store* store = nullptr;
-    RotationManager* rotation_mgr = nullptr;
 };
 
-ApiServer::ApiServer(const Config& cfg, Store& store, RotationManager* rotation_mgr)
-    : cfg_(cfg), store_(store), rotation_mgr_(rotation_mgr),
+ApiServer::ApiServer(const Config& cfg, Store& store)
+    : cfg_(cfg), store_(store),
       p_(std::make_unique<Impl>()) {
     p_->cfg = &cfg;
     p_->store = &store;
-    p_->rotation_mgr = rotation_mgr;
 }
 
 ApiServer::~ApiServer() { Stop(); }
@@ -52,7 +49,7 @@ void send_response(int fd, int code, const std::string& body, const std::string&
     os << "HTTP/1.1 " << code << " ";
     if (code == 200) os << "OK";
     else if (code == 404) os << "Not Found";
-    else if (code == 401) os << "Unauthorized";
+    else if (code == 400) os << "Bad Request";
     else if (code == 503) os << "Service Unavailable";
     else os << "Error";
     os << "\r\nContent-Type: " << content_type << "\r\n";
@@ -122,28 +119,9 @@ std::unordered_map<std::string, std::string> parse_query(const std::string& q) {
     return m;
 }
 
-// very small JSON value extractor for flat {"key":"val"} or {"key":123}
-std::string json_get(const std::string& body, const std::string& key) {
-    std::string pat = "\"" + key + "\":";
-    size_t pos = body.find(pat);
-    if (pos == std::string::npos) return "";
-    pos += pat.size();
-    while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) ++pos;
-    if (pos >= body.size()) return "";
-    if (body[pos] == '"') {
-        size_t end = body.find('"', pos + 1);
-        if (end == std::string::npos) return "";
-        return body.substr(pos + 1, end - pos - 1);
-    }
-    size_t end = pos;
-    while (end < body.size() && body[end] != ',' && body[end] != '}' && body[end] != ' ') ++end;
-    return body.substr(pos, end - pos);
-}
-
-void handle(int fd, ApiServer::Impl* p) {
-    // read request (bounded). First read until we have complete headers, then
-    // accumulate the declared body. A per-recv timeout prevents blocking.
-    std::string req;
+// Read a request (bounded). First read until complete headers, then
+// accumulate the declared body. A per-recv timeout prevents blocking.
+bool read_request(int fd, std::string& req) {
     char buf[4096];
     int total = 0;
     bool headers_done = false;
@@ -176,15 +154,24 @@ void handle(int fd, ApiServer::Impl* p) {
             }
         }
         size_t header_len = req.find("\r\n\r\n") + 4;
-        if (static_cast<long>(req.size()) >= static_cast<long>(header_len) + cl) break; // got full body
+        if (static_cast<long>(req.size()) >= static_cast<long>(header_len) + cl) break;
     }
-    if (req.empty()) { send_response(fd, 400, "{\"error\":\"empty\"}"); return; }
+    return !req.empty();
+}
+
+void handle(int fd, ApiServer::Impl* p) {
+    std::string req;
+    if (!read_request(fd, req)) {
+        send_response(fd, 400, "{\"error\":\"empty\"}");
+        return;
+    }
 
     // parse method + path
     size_t sp1 = req.find(' ');
     size_t sp2 = req.find(' ', sp1 + 1);
     if (sp1 == std::string::npos || sp2 == std::string::npos) {
-        send_response(fd, 400, "{\"error\":\"bad-request\"}"); return;
+        send_response(fd, 400, "{\"error\":\"bad-request\"}");
+        return;
     }
     std::string method = req.substr(0, sp1);
     std::string full = req.substr(sp1 + 1, sp2 - sp1 - 1);
@@ -193,34 +180,16 @@ void handle(int fd, ApiServer::Impl* p) {
     std::string query = (qpos == std::string::npos) ? "" : full.substr(qpos + 1);
     auto q = parse_query(query);
 
-    // auth
-    if (path != "/health" && !p->cfg->api_token.empty()) {
-        size_t ah = req.find("Authorization:");
-        bool ok = false;
-        if (ah != std::string::npos) {
-            size_t b = req.find("Bearer ", ah);
-            if (b != std::string::npos) {
-                std::string tok = req.substr(b + 7);
-                size_t nl = tok.find("\r\n");
-                if (nl != std::string::npos) tok = tok.substr(0, nl);
-                if (tok == p->cfg->api_token) ok = true;
-            }
-        }
-        if (!ok) { send_response(fd, 401, "{\"error\":\"unauthorized\"}"); return; }
-    }
-
     Store& store = *p->store;
 
+    // Liveness probe: process + HTTP server up. Intentionally does NOT touch
+    // the DB so a DB hiccup doesn't kill the process externally (that's /ready).
     if (method == "GET" && path == "/health") {
-        // Liveness probe (PRD §6.6 / action A9): process + HTTP server up.
-        // Intentionally does NOT touch the DB so a MariaDB blip doesn't make
-        // Docker restart the container (that's /ready's job).
         send_response(fd, 200, "{\"status\":\"ok\"}");
         return;
     }
+    // Readiness probe: cheap connectivity check on the existing connection.
     if (method == "GET" && path == "/ready") {
-        // Readiness probe: DB connectivity verified cheaply via mysql_ping()
-        // on the existing store connection — no new connection per probe.
         bool db_ok = p->store && p->store->Ping();
         if (db_ok) {
             send_response(fd, 200, "{\"status\":\"ready\",\"db\":\"ok\"}");
@@ -241,100 +210,24 @@ void handle(int fd, ApiServer::Impl* p) {
         send_response(fd, 200, os.str());
         return;
     }
-    if (method == "GET" && path == "/api/v1/alerts") {
-        send_response(fd, 200, "{\"alerts\":[]}");
-        return;
-    }
     if (method == "GET" && path == "/api/v1/imports") {
         int page = q.count("page") ? std::stoi(q["page"]) : 1;
         int limit = q.count("limit") ? std::stoi(q["limit"]) : 50;
-        if (page < 1) page = 1; if (limit < 1) limit = 50;
+        if (page < 1) page = 1;
+        if (limit < 1) limit = 50;
         std::string status_f = q.count("status") ? q["status"] : "";
         std::string camera_f = q.count("camera") ? q["camera"] : "";
         auto rows = store.ListImports(page, limit, status_f, camera_f);
         auto s = store.GetStats();
         std::ostringstream os;
-        os << "{\"total\":" << s.total << ",\"page\":" << page << ",\"limit\":" << limit << ",\"data\":[";
+        os << "{\"total\":" << s.total << ",\"page\":" << page
+           << ",\"limit\":" << limit << ",\"data\":[";
         for (size_t i = 0; i < rows.size(); ++i) {
             if (i) os << ",";
             os << record_to_json(rows[i]);
         }
         os << "]}";
         send_response(fd, 200, os.str());
-        return;
-    }
-    if (method == "GET" && path.rfind("/api/v1/imports/hash/", 0) == 0) {
-        std::string sha = path.substr(std::string("/api/v1/imports/hash/").size());
-        auto r = store.GetImportByHash(sha);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        send_response(fd, 200, record_to_json(*r));
-        return;
-    }
-    if (method == "GET" && path.rfind("/api/v1/imports/by-source", 0) == 0) {
-        std::string sp = q.count("path") ? q["path"] : "";
-        auto r = store.GetImportBySourcePath(sp);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        send_response(fd, 200, record_to_json(*r));
-        return;
-    }
-    if (method == "GET" && path.rfind("/api/v1/imports/", 0) == 0) {
-        std::string seq = path.substr(std::string("/api/v1/imports/").size());
-        auto r = store.GetImportBySequence(seq);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        send_response(fd, 200, record_to_json(*r));
-        return;
-    }
-    if (method == "POST" && path.rfind("/api/v1/imports/", 0) == 0 &&
-        path.find("/reconvert") != std::string::npos) {
-        std::string seq = path.substr(std::string("/api/v1/imports/").size());
-        seq = seq.substr(0, seq.find("/reconvert"));
-        auto r = store.GetImportBySequence(seq);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        // extract body
-        size_t bpos = req.find("\r\n\r\n");
-        std::string body = (bpos != std::string::npos) ? req.substr(bpos + 4) : "";
-        ReconversionJob job;
-        job.import_id = r->id;
-        job.previous_output_hash = r->output_hash;
-        job.settings.compression = json_get(body, "compression");
-        if (job.settings.compression.empty()) job.settings.compression = "lossless";
-        job.reason = json_get(body, "reason");
-        int64_t rid = store.InsertReconversion(r->id, job);
-        std::ostringstream os;
-        os << "{\"reconversion_id\":" << rid << ",\"sequence\":\"" << json_escape(seq)
-           << "\",\"status\":\"pending\",\"queued_at\":\"\"}";
-        send_response(fd, 200, os.str());
-        return;
-    }
-    if (method == "POST" && path == "/api/v1/imports/by-path/preview-updated") {
-        size_t bpos = req.find("\r\n\r\n");
-        std::string body = (bpos != std::string::npos) ? req.substr(bpos + 4) : "";
-        std::string op = json_get(body, "output_path");
-        if (op.empty()) { send_response(fd, 400, "{\"error\":\"missing-output_path\"}"); return; }
-        auto r = store.GetImportByOutputPath(op);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        // Recompute the output hash from the (re-embedded) DNG on disk and sync.
-        std::string new_hash = sha256_file(op);
-        if (new_hash.empty()) { send_response(fd, 500, "{\"error\":\"hash-failed\"}"); return; }
-        store.UpdateOutputHash(r->id, new_hash);
-        store.RecordPreviewEdit(r->id, "api-preview-updated", r->output_hash, new_hash, 0, 0, 0);
-        SPDLOG_INFO("[api] preview-updated for {} -> new output_hash synced", op);
-        send_response(fd, 200, "{\"status\":\"synced\"}");
-        return;
-    }
-    if (method == "POST" && path == "/api/v1/imports/by-source/rotation-updated") {
-        if (!p->rotation_mgr) { send_response(fd, 503, "{\"error\":\"rotation-disabled\"}"); return; }
-        size_t bpos = req.find("\r\n\r\n");
-        std::string body = (bpos != std::string::npos) ? req.substr(bpos + 4) : "";
-        std::string sp = json_get(body, "source_path");
-        int orient = 1;
-        std::string os = json_get(body, "orientation");
-        if (!os.empty()) orient = std::stoi(os);
-        std::string client = json_get(body, "client_id");
-        auto r = store.GetImportBySourcePath(sp);
-        if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
-        p->rotation_mgr->Queue(r->id, r->output_path, orient, client);
-        send_response(fd, 200, "{\"status\":\"queued\"}");
         return;
     }
 

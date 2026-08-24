@@ -5,10 +5,10 @@
 #include "pipeline.h"
 #include "util.h"
 #include "metrics.h"
-#include "exiftool_daemon.h"
 
 #include <chrono>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <queue>
@@ -21,11 +21,51 @@
 namespace rawimport {
 namespace fs = std::filesystem;
 
+namespace {
+
+// One-shot EXIF extraction (action plan §5 Phase 4). No daemon: run
+// `exiftool -DateTimeOriginal -S <path>` per file, parse the strict
+// "YYYY:MM:DD HH:MM:SS" shape, and fall back to stat() mtime otherwise.
+ExifResult exif_one_shot(const std::string& path, const std::string& exiftool_bin) {
+    ExifResult r = exif_from_mtime(path);
+
+    std::string cmd = "\"" + exiftool_bin + "\" -DateTimeOriginal -S \"" + path + "\"";
+#ifdef _WIN32
+    FILE* f = _popen(cmd.c_str(), "r");
+#else
+    FILE* f = popen(cmd.c_str(), "r");
+#endif
+    if (!f) return r;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        std::string s = line;
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        // format: "DateTimeOriginal: 2026:08:09 18:23:08"
+        size_t colon = s.find(':');
+        if (colon == std::string::npos) continue;
+        std::string val = trim(s.substr(colon + 1));
+        if (val.size() >= 19 && val[4] == ':' && val[7] == ':' && val[10] == ' ' &&
+            val[13] == ':' && val[16] == ':') {
+            r.date = val.substr(0, 4) + "-" + val.substr(5, 2) + "-" + val.substr(8, 2);
+            r.time = val.substr(11, 8);
+            r.source = DateSource::Exif;
+            break;
+        }
+    }
+#ifdef _WIN32
+    _pclose(f);
+#else
+    pclose(f);
+#endif
+    return r;
+}
+
+} // namespace
+
 struct Worker::Impl {
     std::mutex mtx;
     std::condition_variable cv;
     std::queue<std::string> files;
-    std::queue<ReconversionJob> reconverts;
     // TTL map: path -> last_seen_time (evicted at 2 x poll_interval, PRD §6.2).
     // Failure counts live in fail_counts below so they SURVIVE TTL eviction;
     // keeping them here reset the dead-letter counter every eviction window
@@ -50,45 +90,29 @@ struct Worker::Impl {
     };
     std::unordered_map<std::string, FpEntry> fp_cache;
     std::thread poll_thread;
-    std::thread reconvert_thread;
     std::vector<std::thread> worker_threads;
     std::atomic<int> queue_depth{0};
     std::atomic<int> active_workers{0};
 };
 
-Worker::Worker(const Config& cfg, Store& store, ConverterEngine* engine, PreviewEmbedder* embedder)
-    : cfg_(cfg), store_(store), engine_(engine), embedder_(embedder), stop_(false),
-      p_(std::make_unique<Impl>()) {
-    // Initialize ExifTool daemon if enabled
-    if (cfg_.exiftool_daemon) {
-        exif_daemon_ = std::make_unique<ExifToolDaemon>(cfg_.exiftool_bin);
-        if (!exif_daemon_->healthy()) {
-            SPDLOG_WARN("[worker] ExifTool daemon unhealthy, will use one-shot fallback");
-            exif_daemon_.reset();
-        }
-    }
-}
+Worker::Worker(const Config& cfg, Store& store, ConverterEngine* engine)
+    : cfg_(cfg), store_(store), engine_(engine), stop_(false),
+      p_(std::make_unique<Impl>()) {}
 
 Worker::~Worker() { Stop(); }
 
 void Worker::Start() {
     p_->poll_thread = std::thread([this]() { PollLoop(); });
-    p_->reconvert_thread = std::thread([this]() { ReconvertDrain(); });
-    
+
     // Determine number of converter workers
     int max_workers = cfg_.max_converter_workers;
     if (max_workers <= 0) {
         max_workers = std::thread::hardware_concurrency();
         if (max_workers <= 0) max_workers = 4;
     }
-    // Force single worker for adobedng engine
-    if (engine_ && engine_->Name() == "adobedng") {
-        max_workers = 1;
-        SPDLOG_WARN("[worker] adobedng engine detected, forcing MAX_CONVERTER_WORKERS=1");
-    }
     // Cap at 8
     if (max_workers > 8) max_workers = 8;
-    
+
     SPDLOG_INFO("[worker] starting {} converter worker threads", max_workers);
 
     // Each thread creates its own DB connection inside WorkerThread() (PRD §7.1)
@@ -100,23 +124,12 @@ void Worker::Start() {
 void Worker::Stop() {
     stop_.store(true);
     p_->cv.notify_all();
-    
+
     if (p_->poll_thread.joinable()) p_->poll_thread.join();
-    if (p_->reconvert_thread.joinable()) p_->reconvert_thread.join();
-    
+
     for (auto& t : p_->worker_threads) {
         if (t.joinable()) t.join();
     }
-    
-    if (exif_daemon_) {
-        exif_daemon_->stop();
-    }
-}
-
-void Worker::QueueReconvert(int64_t import_id, const ReconversionJob& job) {
-    std::lock_guard<std::mutex> lk(p_->mtx);
-    p_->reconverts.push(job);
-    p_->cv.notify_all();
 }
 
 int Worker::QueueDepth() const { return p_->queue_depth.load(); }
@@ -203,15 +216,9 @@ void Worker::cleanup_seen_ttl() {
 }
 
 void Worker::WorkerThread() {
-    // Each worker thread owns its own DB connection (PRD §7.1):
-    // libmariadb connections are NOT safe for concurrent use across threads.
-    MYSQL* conn = nullptr;
-    for (int attempt = 0; attempt < 5 && !stop_.load(); ++attempt) {
-        conn = Store::CreateConnection(cfg_);
-        if (conn) break;
-        SPDLOG_WARN("[worker] per-worker DB connection attempt {} failed: retrying", attempt + 1);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
+    // Each worker thread owns its own DB connection: SQLite connections are
+    // not safe for concurrent use across threads by default.
+    sqlite3* conn = Store::CreateConnection(cfg_);
     if (!conn) {
         SPDLOG_ERROR("[worker] per-worker DB connection failed; worker thread exiting");
         return;
@@ -314,16 +321,9 @@ void Worker::ProcessFile(const std::string& path, Store& store) {
         return;
     }
     
-    // Stage 3: EXIF extraction
+    // Stage 3: EXIF extraction (one-shot exiftool, mtime fallback inside).
     auto exif_start = std::chrono::steady_clock::now();
-    ExifResult ex;
-    if (exif_daemon_) {
-        // Daemon path (or its internal stat()-mtime fallback when unhealthy).
-        ex = exif_daemon_->extract_date(path);
-    } else {
-        // EXIFTOOL_DAEMON=false: mtime-only result (one-shot deleted, D27/D24 era).
-        ex = exif_from_mtime(path);
-    }
+    ExifResult ex = exif_one_shot(path, cfg_.exiftool_bin);
     double exif_dur = std::chrono::duration<double>(std::chrono::steady_clock::now() - exif_start).count();
     Metrics::instance().observe_exif_duration(exif_dur);
     
@@ -433,6 +433,7 @@ void Worker::evict_fp_cache() {
 }
 
 void Worker::move_to_dead_letter(const std::string& path, Store& store) {
+    (void)store;  // alerts table removed in portable build; logging only
     // This failure path is terminal for this pass: release the in-flight
     // marker so the poller may requeue (retry) the file.
     release_inflight(path);
@@ -468,42 +469,6 @@ void Worker::move_to_dead_letter(const std::string& path, Store& store) {
         return;
     }
     SPDLOG_WARN("[worker] moved to dead letter after {} retries: {}", new_retry, dead_path);
-
-    // Alert via the existing alerts table (amendment ruling #3 — no new table).
-    std::string msg = "Dead letter after " + std::to_string(new_retry) + " retries: " + path;
-    if (!store.InsertAlert("error", "worker", msg)) {
-        SPDLOG_ERROR("[worker] failed to insert dead-letter alert for {}", path);
-    }
-}
-
-void Worker::ReconvertDrain() {
-    while (!stop_.load()) {
-        ReconversionJob job;
-        {
-            std::unique_lock<std::mutex> lk(p_->mtx);
-            if (p_->reconverts.empty()) {
-                p_->cv.wait_for(lk, std::chrono::seconds(1),
-                    [this]() { return stop_.load() || !p_->reconverts.empty(); });
-                continue;
-            }
-            job = p_->reconverts.front();
-            p_->reconverts.pop();
-        }
-        // best-effort: re-run conversion on the archived source
-        auto rec = store_.GetImportById(job.import_id);
-        if (!rec) { SPDLOG_WARN("[worker] reconvert: import {} not found", job.import_id); continue; }
-        if (!engine_) continue;
-        ConversionSettings s = job.settings;
-        if (engine_->Convert(rec->source_path, rec->output_path, s)) {
-            std::string h = sha256_file(rec->output_path);
-            store_.UpdateOutputHash(rec->id, h);
-            store_.UpdateReconversion(job.id, h, ImportStatus::Completed);
-            SPDLOG_INFO("[worker] reconverted {}", rec->sequence_name);
-        } else {
-            store_.UpdateReconversion(job.id, "", ImportStatus::Failed);
-            SPDLOG_ERROR("[worker] reconvert failed {}", rec->sequence_name);
-        }
-    }
 }
 
 } // namespace rawimport

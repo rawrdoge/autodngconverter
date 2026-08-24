@@ -15,7 +15,6 @@
 #include <sys/sendfile.h>
 #else
 #include <windows.h>
-#include <sys/utime.h>
 #endif
 
 namespace rawimport {
@@ -69,17 +68,6 @@ bool ensure_dir(const std::string& path) {
     std::error_code ec;
     fs::create_directories(path, ec);
     return !ec || fs::is_directory(path);
-}
-
-bool touch_mtime(const std::string& path) {
-#ifdef _WIN32
-    struct _utimbuf tb {};
-    tb.actime = tb.modtime = time(nullptr);
-    return _utime(path.c_str(), &tb) == 0;
-#else
-    // times = nullptr sets both atime and mtime to current time
-    return utimensat(AT_FDCWD, path.c_str(), nullptr, 0) == 0;
-#endif
 }
 
 std::string random_token() {

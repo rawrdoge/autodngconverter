@@ -1,13 +1,12 @@
 #pragma once
-// converter.h — ConverterEngine interface for the RawImport C++ rewrite.
-// Phase 0 bootstrap (LEAD). See PRD_RawImport_Pipeline_CppRewrite.md §3.1, §6.2.
+// converter.h — ConverterEngine interface for the RawImport portable build.
 #include <string>
 #include "config.h"
 #include "pipeline.h"
 
 namespace rawimport {
 
-// Abstract conversion engine. dnglab is the default; adobedng/libraw are stubs.
+// Abstract conversion engine. dnglab is the only engine in the portable build.
 class ConverterEngine {
 public:
     virtual ~ConverterEngine() = default;
@@ -15,31 +14,14 @@ public:
     virtual bool Available() const = 0;
 
     // Convert src RAW -> dst DNG using settings. Returns true on success.
-    // Implementations MUST use the authoritative dnglab CLI (see pipeline.h note):
-    //   dnglab convert --input <SRC> --output <DST> -c <compression>
-    //          --keep-mtime <true|false> -f
+    // Implementations MUST use the dnglab CLI form:
+    //   dnglab convert <INPUT> <OUTPUT> -c <lossless|uncompressed> -f
     virtual bool Convert(const std::string& src, const std::string& dst,
                          const ConversionSettings& settings) = 0;
 };
 
-// Re-embed a JPEG preview into an existing DNG (used by rotation + re-embed).
-// Worker preference: dnglab reembed -> DNG SDK -> exiftool. Fixed seed for idempotency.
-class PreviewEmbedder {
-public:
-    virtual ~PreviewEmbedder() = default;
-    virtual std::string Name() const = 0;
-    virtual bool Available() const = 0;
-    // Embeds jpeg_path into dng_path in place. Returns true on success.
-    virtual bool Embed(const std::string& dng_path, const std::string& jpeg_path,
-                       const std::string& seed) = 0;
-    // Write EXIF Orientation tag (1-8) to dng_path. Returns true on success.
-    virtual bool SetOrientation(const std::string& dng_path, int orientation) = 0;
-};
-
-// Factory: selects engine by CONVERTER_ENGINE env (default dnglab).
+// Factory: resolves the dnglab binary via config precedence
+// (CONVERTER_ENGINE_BIN -> <root>/tools/dnglab -> PATH).
 ConverterEngine* MakeConverter(const Config& cfg);
-
-// Build the preferred embedder chain (dnglab first, then DNG SDK, then exiftool).
-PreviewEmbedder* MakeEmbedder(const Config& cfg);
 
 } // namespace rawimport

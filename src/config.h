@@ -1,71 +1,60 @@
 #pragma once
-// config.h — environment-driven configuration for the RawImport C++ rewrite.
-// Phase 0 bootstrap (LEAD). See PRD_RawImport_Pipeline_CppRewrite.md §9.
+// config.h — environment-driven configuration for the RawImport portable build.
+// Env vars only (no INI, no second config system) per action plan §5 Phase 2.
+// Defaults resolve against the portable root: RAWIMPORT_HOME if set, otherwise
+// the directory containing the executable.
 #include <string>
 #include "pipeline.h"
 
 namespace rawimport {
 
-struct Config {
-    // Database (MariaDB only in v1)
-    std::string db_host = "mariadb";
-    int db_port = 3306;
-    std::string db_user = "rawimport";
-    std::string db_password;
-    std::string db_name = "rawimport";
+// Portable root resolution order (action plan §5 Phase 2):
+// 1. RAWIMPORT_HOME env var (explicit override)
+// 2. Directory containing the executable
+std::string get_portable_root();
 
-    // Directories
-    std::string watch_dir = "/watch";
-    std::string output_dir = "/output";
-    std::string archive_dir = "/archive";
-    std::string db_dir = "/db";
+// Resolve an external tool binary (action plan §5 Phase 3):
+// 1. override_path (env var like CONVERTER_ENGINE_BIN / EXIFTOOL_BIN)
+// 2. <root>/tools/<name>[.exe]
+// 3. bare name (PATH lookup)
+std::string resolve_tool(const std::string& override_path, const std::string& root,
+                         const std::string& name);
+
+struct Config {
+    // Portable root (exe dir or RAWIMPORT_HOME).
+    std::string root;
+
+    // Directories (default to <root>/...; overridable by env)
+    std::string watch_dir;
+    std::string output_dir;
+    std::string archive_dir;
+    std::string db_name;   // full path of the SQLite DB file (<root>/data/rawimport.db)
 
     // Naming / EXIF
     std::string folder_schema = "%Y/%m";
     std::string file_pattern = "IMG_{seq}";
-    std::string converter_engine = "dnglab";
-    std::string converter_engine_bin;   // optional explicit binary path
-    std::string appdata_dir = "/appdata";
-    std::string exiftool_bin = "exiftool";
+    std::string converter_engine_bin;   // resolved dnglab path (env -> tools/ -> PATH)
+    std::string exiftool_bin;           // resolved exiftool path (env -> tools/ -> PATH)
 
-    // Default conversion settings (PRD §9)
+    // Default conversion settings (dnglab CLI accepts only -c/-f/--keep-mtime)
     bool gen_thumb_jpeg = false;
     std::string def_compression = "lossless";
-    std::string def_dng_version = "1.4";
-    std::string def_preview_medium = "1024x1024";
-    std::string def_preview_full = "4000x3000";
-    int def_jpeg_quality = 92;
-    bool def_linear = false;
 
     // Watcher
     int poll_interval_sec = 10;
     int debounce_sec = 10;
     int queue_size = 100;
 
-    // Performance
-    int max_converter_workers = 0;  // 0 = auto (hardware_concurrency)
-    bool exiftool_daemon = true;    // use persistent exiftool subprocess
-
-    // Reliability
+    // Performance & reliability
+    int max_converter_workers = 0;  // 0 = auto (hardware_concurrency, capped at 8)
     int dead_letter_max_retries = 3;
-    bool fast_fingerprint = true;   // two-stage dedup gate before full SHA-256 (PRD §5.3)
+    bool fast_fingerprint = true;   // two-stage dedup gate before full SHA-256
 
     // Observability
-    std::string alert_push_url;   // optional ntfy/Gotify
     int http_port = 8080;
-
-    // Rotation sync (PRD §5)
-    int rotation_grace_ms = 2000;
-    std::string rotation_mode = "metadata"; // metadata only safe for live sync
-    std::string immich_url;
-    std::string immich_token;
-    std::string digikam_rescan = "touch";   // touch | dbus
-
-    // Lua plugin facing
-    std::string api_token;        // optional bearer for Lua->API
 };
 
-// Load configuration from environment variables. Mirrors Go LoadConfig (config.go).
+// Load configuration from environment variables with portable-root defaults.
 Config LoadConfig();
 
 } // namespace rawimport
