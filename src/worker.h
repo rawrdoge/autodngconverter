@@ -43,6 +43,7 @@ private:
     void WorkerThread();
     void cleanup_seen_ttl();
     void evict_fp_cache();  // caller must hold p_->mtx
+    void release_inflight(const std::string& path);
     void move_to_dead_letter(const std::string& path, Store& store);
 
     const Config& cfg_;
