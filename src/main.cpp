@@ -38,9 +38,16 @@ bool ensure_portable_folders(const Config& cfg) {
     };
     for (const std::string& d : dirs) {
         std::error_code ec;
-        if (!std::filesystem::exists(d, ec) && !ensure_dir(d)) {
-            SPDLOG_ERROR("[main] failed to create directory: {}", d);
-            return false;
+        if (!std::filesystem::is_directory(d, ec)) {
+            // Missing — or exists as a stray FILE (e.g. user accident). Remove
+            // the file (fs::remove never recurses into directories) and retry.
+            if (std::filesystem::exists(d, ec)) {
+                std::filesystem::remove(d, ec);
+            }
+            if (!ensure_dir(d)) {
+                SPDLOG_ERROR("[main] failed to create directory: {}", d);
+                return false;
+            }
         }
     }
     SPDLOG_INFO("[main] portable folders ready under {}", cfg.root);
