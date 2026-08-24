@@ -44,3 +44,6 @@ vcpkg_installed/
 
 # Portable packaging output
 dist/
+
+# Local test staging (never commit)
+.staging/
