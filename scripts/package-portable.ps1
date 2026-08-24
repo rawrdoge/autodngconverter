@@ -48,6 +48,15 @@ foreach ($t in $toolSpecs) {
     if ($found) {
         Copy-Item $found $dest
         Write-Host "bundled $($t.Name) from $found"
+        # exiftool's Windows build requires its exiftool_files/ directory
+        # beside the exe (contains the Perl runtime) — carry it along.
+        if ($t.Name -eq 'exiftool') {
+            $filesDir = Join-Path (Split-Path -Parent $found) 'exiftool_files'
+            if (Test-Path $filesDir) {
+                Copy-Item $filesDir (Join-Path $stage 'tools\exiftool_files') -Recurse -Force
+                Write-Host 'bundled exiftool_files'
+            }
+        }
     } else {
         Write-Warning "$($t.Name).exe not found — place it manually in:"
         Write-Warning "  $dest"

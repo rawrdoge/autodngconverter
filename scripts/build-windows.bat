@@ -1,11 +1,20 @@
 @echo off
 rem Build rawimport-pipeline.exe natively for Windows (MSVC + vcpkg static deps).
 rem Usage: scripts\build-windows.bat [extra cmake args]
+rem
+rem CI-friendly behavior:
+rem  - Skips the hardcoded vcvars64.bat call when an MSVC environment is already
+rem    active (VCINSTALLDIR set, e.g. by ilammy/msvc-dev-cmd in GitHub Actions).
+rem  - Honors VCPKG_ROOT from the environment (GitHub Actions sets it); local
+rem    machines fall back to E:\dev\vcpkg.
+rem  - Only prepends the local cmake dir to PATH when it exists.
 setlocal
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
-if errorlevel 1 exit /b 1
-set "PATH=E:\dev\cmake-3.31.6-windows-x86_64\bin;%PATH%"
-set "VCPKG_ROOT=E:\dev\vcpkg"
+if "%VCINSTALLDIR%"=="" (
+  call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+  if errorlevel 1 exit /b 1
+)
+if exist "E:\dev\cmake-3.31.6-windows-x86_64\bin\cmake.exe" set "PATH=E:\dev\cmake-3.31.6-windows-x86_64\bin;%PATH%"
+if "%VCPKG_ROOT%"=="" set "VCPKG_ROOT=E:\dev\vcpkg"
 if not exist "%VCPKG_ROOT%\vcpkg.exe" (
   echo error: vcpkg not found at %VCPKG_ROOT%
   exit /b 1
