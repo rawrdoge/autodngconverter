@@ -1,0 +1,213 @@
+name: Unified Release (Docker image + Portable ZIP)
+
+# One tag = one release = both artifacts together.
+# Triggered by version tags pushed on main (tags are repo-global refs; this
+# file executes from the tagged commit). The portable branch never creates
+# its own release — it only supplies binaries to Job B below.
+on:
+  push:
+    tags: ["v*"]
+    tags-ignore: ["*portable*"]
+
+permissions:
+  contents: write     # create the GitHub Release
+  packages: write     # push image to GHCR
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE: rawrdoge/autodngconverter
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job A: Docker image from the tagged ref (main line, MariaDB product)
+  # ------------------------------------------------------------------
+  build-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (tagged ref, with submodules)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Guard against Windows-style nul redirects
+        run: bash scripts/check-no-nul.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract GHCR metadata (version tags only)
+        id: meta-ghcr
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+
+      - name: Extract Docker Hub metadata
+        id: meta-hub
+        if: ${{ env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-ghcr.outputs.tags }}
+          labels: ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push to Docker Hub
+        if: ${{ env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-hub.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Attachable release asset: save the just-pushed image as a gzipped
+      # tarball so air-gapped / NAS users can `docker load` it.
+      - name: Save image tarball for the release page
+        run: |
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          docker pull "$IMAGE"
+          docker save "$IMAGE" | gzip > "rawimport-${GITHUB_REF_NAME}-docker-image.tar.gz"
+
+      - name: Upload docker artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: rawimport-*-docker-image.tar.gz
+          retention-days: 3
+
+  # ------------------------------------------------------------------
+  # Job B: Windows portable ZIP from the portable branch (parallel)
+  # ------------------------------------------------------------------
+  build-portable:
+    runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+    steps:
+      - name: Checkout portable branch
+        uses: actions/checkout@v7
+        with:
+          ref: portable
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache vcpkg + built deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg
+            vcpkg_installed
+          key: vcpkg-win-x64-windows-static-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap vcpkg (skipped on cache hit)
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            git clone --depth=1 https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          }
+
+      - name: Build rawimport-pipeline.exe
+        shell: cmd
+        run: scripts\build-windows.bat
+
+      # Pinned external tools (hashes cross-checked against upstream digests).
+      # dnglab 0.7.2 win-x64 CLI verified locally: positional <INPUT> <OUTPUT>,
+      # -c/--compression, --keep-mtime, -f (D17 contract).
+      - name: Download pinned tools
+        shell: bash
+        run: |
+          mkdir -p tools
+          curl -fsSL -o dnglab.zip \
+            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-win-x64_v0.7.2.zip"
+          echo "6a50649768213ada4a06d973a91af5a5714dc40d6402ec9fe2a1f5f80aaafe23  dnglab.zip" | sha256sum -c -
+          unzip -j dnglab.zip -d tools/
+          curl -fsSL -o exiftool.zip "https://exiftool.org/exiftool-13.59_64.zip"
+          echo "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec  exiftool.zip" | sha256sum -c -
+          unzip -o -q exiftool.zip -d ext/
+          mv "ext/exiftool(-k).exe" tools/exiftool.exe
+          mv ext/exiftool_files tools/exiftool_files
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: scripts\package-portable.ps1 -Version "$($env:GITHUB_REF_NAME.Substring(1))"
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rawimport-portable
+          path: dist/rawimport-portable-*.zip
+          retention-days: 3
+
+  # ------------------------------------------------------------------
+  # Job C: ONE release page with BOTH artifacts
+  # ------------------------------------------------------------------
+  create-release:
+    needs: [build-docker, build-portable]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download docker artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: release-assets
+
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rawimport-portable
+          path: release-assets
+
+      - name: Create unified GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          body: |
+            ## RawImport ${{ github.ref_name }} — pick your path
+
+            ### 🖥️ NAS / Docker users (full MariaDB-powered deployment)
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+            Or download the attached tarball and load it offline:
+            ```bash
+            docker load -i rawimport-${{ github.ref_name }}-docker-image.tar.gz
+            ```
+
+            ### 📦 Windows layman users (no install, no database server)
+            Download the **rawimport-portable-*-win-x64.zip** asset below, then:
+            1. Unzip anywhere.
+            2. Drop RAW files (NRW, NEF, CR2, ARW) into the `watch/` folder.
+            3. DNGs appear in `output/`; originals move to `archive/`.
+
+            Everything runs locally — the portable build never contacts the internet.
