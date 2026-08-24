@@ -1,11 +1,7 @@
 #include "pipeline.h"
 #include "util.h"
 
-#ifdef _WIN32
-#include <io.h>
-#define popen _popen
-#define pclose _pclose
-#endif
+#include <sys/stat.h>
 
 #include <array>
 #include <chrono>
@@ -93,52 +89,19 @@ std::string sha256_file(const std::string& path) {
     return to_hex(out, outlen);
 }
 
-ExifResult extract_exif_date(const std::string& path, const std::string& exiftool_bin) {
+ExifResult exif_from_mtime(const std::string& path) {
+    // stat()-based mtime fallback (D18/D26 closure): epoch-portable on every
+    // toolchain; replaces both the broken one-shot popen path and the
+    // std::filesystem file_clock conversions.
     ExifResult r;
     r.source = DateSource::Mtime;
-#ifdef _WIN32
-    const char* devnull = " > NUL";
-#else
-    const char* devnull = " > /dev/null";
-#endif
-    std::string cmd = exiftool_bin + " -DateTimeOriginal -S -s " +
-                     "\"" + path + "\"" + devnull;
-    FILE* f = popen(cmd.c_str(), "r");
-    if (f) {
-        char line[256];
-        if (fgets(line, sizeof(line), f)) {
-            std::string s = line;
-            if (!s.empty() && s.back() == '\n') s.pop_back();
-            // format: "YYYY:MM:DD HH:MM:SS"
-            if (s.size() >= 19 && s[4] == ':' && s[7] == ':' && s[10] == ' ') {
-                r.date = s.substr(0, 4) + "-" + s.substr(5, 2) + "-" + s.substr(8, 2);
-                r.time = s.substr(11, 8);
-                r.source = DateSource::Exif;
-            }
-        }
-        pclose(f);
-    }
-    if (r.source == DateSource::Mtime) {
-        std::error_code ec;
-        auto ft = fs::last_write_time(path, ec);
-        if (!ec) {
-            // GCC 12 libstdc++ lacks std::chrono::clock_cast; use the
-            // epoch-correct helper (file_clock epoch is 2174-01-01).
-            auto sys_tp = file_time_to_system(ft);
-            auto tt = std::chrono::system_clock::to_time_t(sys_tp);
-            std::tm tm{};
-#ifdef _WIN32
-            localtime_s(&tm, &tt);
-#else
-            localtime_r(&tt, &tm);
-#endif
-            std::ostringstream os;
-            os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-            std::string s = os.str();
-            r.date = s.substr(0, 10);
-            r.time = s.substr(11, 8);
-        }
-    }
+    std::tm tm{};
+    if (!file_mtime_tm(path, tm)) return r;
+    std::ostringstream os;
+    os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    std::string s = os.str();
+    r.date = s.substr(0, 10);
+    r.time = s.substr(11, 8);
     return r;
 }
 
@@ -214,24 +177,19 @@ uint64_t fnv1a_64(const uint8_t* data, size_t len) {
 
 FastFingerprint compute_fast_fingerprint(const std::string& path) {
     FastFingerprint fp;
-    std::error_code ec;
-    
-    // Get file size and mtime
-    auto status = fs::status(path, ec);
-    if (ec) return fp;
-    
-    fp.size = static_cast<uint64_t>(fs::file_size(path, ec));
-    if (ec) return fp;
-    
-    auto ft = fs::last_write_time(path, ec);
-    if (ec) return fp;
-    
-    // Convert file_time to seconds since epoch (epoch-correct conversion)
-    auto sys_tp = file_time_to_system(ft);
-    fp.mtime = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            sys_tp.time_since_epoch()).count());
-    
+
+    // stat() supplies size + mtime (Unix-epoch seconds) in one call —
+    // epoch-portable, no std::filesystem time conversion involved.
+#ifdef _WIN32
+    struct _stat st {};
+    if (_stat(path.c_str(), &st) != 0) return fp;
+#else
+    struct stat st {};
+    if (stat(path.c_str(), &st) != 0) return fp;
+#endif
+    fp.size = static_cast<uint64_t>(st.st_size);
+    fp.mtime = static_cast<uint64_t>(st.st_mtime);
+
     // Read first 4KB for FNV-1a hash
     std::ifstream in(path, std::ios::binary);
     if (!in) return fp;

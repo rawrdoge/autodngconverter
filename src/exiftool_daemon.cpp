@@ -144,25 +144,8 @@ ExifResult ExifToolDaemon::extract_date(const std::string& path) {
     r.source = DateSource::Mtime;
     
     if (!running_.load()) {
-        // Fallback to mtime
-        std::error_code ec;
-        auto ft = fs::last_write_time(path, ec);
-        if (!ec) {
-            auto sys_tp = file_time_to_system(ft);
-            auto tt = std::chrono::system_clock::to_time_t(sys_tp);
-            std::tm tm{};
-#ifdef _WIN32
-            localtime_s(&tm, &tt);
-#else
-            localtime_r(&tt, &tm);
-#endif
-            std::ostringstream os;
-            os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-            std::string s = os.str();
-            r.date = s.substr(0, 10);
-            r.time = s.substr(11, 8);
-        }
-        return r;
+        // Fallback to mtime via stat() (epoch-portable)
+        return exif_from_mtime(path);
     }
     
     // Use daemon: -S -DateTimeOriginal -FileModifyDate <file>
@@ -206,25 +189,11 @@ ExifResult ExifToolDaemon::extract_date(const std::string& path) {
         }
     }
     
-    // Fallback to mtime if EXIF not found
+    // Fallback to mtime if EXIF not found (stat()-based, epoch-portable)
     if (r.source == DateSource::Mtime) {
-        std::error_code ec;
-        auto ft = fs::last_write_time(path, ec);
-        if (!ec) {
-            auto sys_tp = file_time_to_system(ft);
-            auto tt = std::chrono::system_clock::to_time_t(sys_tp);
-            std::tm tm{};
-#ifdef _WIN32
-            localtime_s(&tm, &tt);
-#else
-            localtime_r(&tt, &tm);
-#endif
-            std::ostringstream os;
-            os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-            std::string s = os.str();
-            r.date = s.substr(0, 10);
-            r.time = s.substr(11, 8);
-        }
+        ExifResult m = exif_from_mtime(path);
+        r.date = m.date;
+        r.time = m.time;
     }
     
     return r;
@@ -280,7 +249,8 @@ void ExifToolDaemon::stop() {}
 std::string ExifToolDaemon::send_command(const std::string&) { return ""; }
 
 ExifResult ExifToolDaemon::extract_date(const std::string& path) {
-    return extract_exif_date(path, exiftool_bin_);
+    // Daemon unavailable on this platform: stat()-based mtime result.
+    return exif_from_mtime(path);
 }
 #endif
 

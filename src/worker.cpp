@@ -317,10 +317,12 @@ void Worker::ProcessFile(const std::string& path, Store& store) {
     // Stage 3: EXIF extraction
     auto exif_start = std::chrono::steady_clock::now();
     ExifResult ex;
-    if (exif_daemon_ && exif_daemon_->healthy()) {
+    if (exif_daemon_) {
+        // Daemon path (or its internal stat()-mtime fallback when unhealthy).
         ex = exif_daemon_->extract_date(path);
     } else {
-        ex = extract_exif_date(path, cfg_.exiftool_bin);
+        // EXIFTOOL_DAEMON=false: mtime-only result (one-shot deleted, D27/D24 era).
+        ex = exif_from_mtime(path);
     }
     double exif_dur = std::chrono::duration<double>(std::chrono::steady_clock::now() - exif_start).count();
     Metrics::instance().observe_exif_duration(exif_dur);

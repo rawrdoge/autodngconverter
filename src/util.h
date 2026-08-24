@@ -4,8 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <chrono>
-#include <filesystem>
+#include <ctime>
 
 namespace rawimport {
 
@@ -41,12 +40,9 @@ std::string random_token();
 // Generate a cryptographically secure random token (for processing_locks worker_id).
 std::string secure_random_token();
 
-// Convert fs file_time to a system_clock time point.
-// libstdc++ (and the C++20 standard) give file_clock an epoch of 2174-01-01 UTC;
-// naively reinterpreting the raw duration as system time shifts every date by
-// ~204 years (a 2026 mtime became "1822" in production E2E). GCC 12 lacks
-// clock_cast, so apply the documented epoch offset explicitly: days from
-// 1970-01-01 to 2174-01-01 = 74,510.
-std::chrono::system_clock::time_point file_time_to_system(std::filesystem::file_time_type ft);
+// Read a file's mtime via POSIX stat() and fill `out` with local time.
+// Epoch-portable by construction (st_mtime is seconds since the Unix epoch
+// on every toolchain); replaces all std::filesystem time conversions.
+bool file_mtime_tm(const std::string& path, std::tm& out);
 
 } // namespace rawimport

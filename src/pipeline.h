@@ -89,7 +89,8 @@ std::string sha256_bytes(const std::vector<uint8_t>& data);
 // Extract EXIF DateTimeOriginal; falls back to file mtime.
 // Returns (capture_date, capture_time, date_source).
 struct ExifResult { std::string date; std::string time; DateSource source; };
-ExifResult extract_exif_date(const std::string& path, const std::string& exiftool_bin);
+// stat()-based mtime-only result (used when no exiftool path is available).
+ExifResult exif_from_mtime(const std::string& path);
 
 // Build folder schema path from a date + FOLDER_SCHEMA template (e.g. %Y/%m).
 std::string build_folder_schema(const std::string& tmpl, const std::string& capture_date);

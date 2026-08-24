@@ -98,15 +98,53 @@ private:
 };
 
 namespace {
-// Escape stopgap for the remaining string-concatenated queries (amendment
-// ruling #4: hot writes use prepared statements; read-only paths escape every
-// interpolated value via mysql_real_escape_string).
-std::string sql_escape(MYSQL* conn, const std::string& in) {
-    if (in.empty()) return in;
-    std::string out(in.size() * 2 + 1, '\0');
-    unsigned long n = mysql_real_escape_string(conn, out.data(), in.c_str(), in.size());
-    out.resize(n);
-    return out;
+// Execute a SELECT with bound string parameters and return all rows as
+// string matrices. Replaces string-concatenated read queries entirely
+// (handoff v2.0.6: ruling #4 override — no escape stopgaps).
+std::vector<std::vector<std::string>> exec_select(
+    MYSQL* conn, const std::string& sql, const std::vector<std::string>& params) {
+    std::vector<std::vector<std::string>> rows;
+    PreparedStatement stmt(conn, sql);
+    if (!stmt.valid()) return rows;
+
+    if (!params.empty()) {
+        std::vector<MYSQL_BIND> pb(params.size());
+        for (size_t i = 0; i < params.size(); ++i) {
+            pb[i].buffer_type = MYSQL_TYPE_STRING;
+            pb[i].buffer = const_cast<char*>(params[i].c_str());
+            pb[i].buffer_length = static_cast<unsigned long>(params[i].size());
+        }
+        if (!stmt.bind_param(pb.data(), static_cast<unsigned>(pb.size()))) return rows;
+    }
+    if (!stmt.execute()) return rows;
+
+    unsigned ncols = mysql_stmt_field_count(stmt.get());
+    if (ncols == 0) return rows;
+
+    // Per-column fixed buffers; values in this schema are far below 8 KiB.
+    constexpr unsigned long kBuf = 8192;
+    std::vector<char> buf(ncols * kBuf);
+    std::vector<unsigned long> lens(ncols, 0);
+    std::vector<MYSQL_BIND> rb(ncols);
+    for (unsigned i = 0; i < ncols; ++i) {
+        rb[i].buffer_type = MYSQL_TYPE_STRING;
+        rb[i].buffer = buf.data() + i * kBuf;
+        rb[i].buffer_length = kBuf;
+        rb[i].length = &lens[i];
+    }
+    if (!stmt.bind_result(rb.data(), ncols)) return rows;
+
+    while (true) {
+        int rc = mysql_stmt_fetch(stmt.get());
+        if (rc == MYSQL_NO_DATA) break;
+        if (rc != 0) break;  // error or truncated: drop row
+        std::vector<std::string> row(ncols);
+        for (unsigned i = 0; i < ncols; ++i)
+            row[i].assign(buf.data() + i * kBuf, lens[i]);
+        rows.push_back(std::move(row));
+    }
+    stmt.free_result();
+    return rows;
 }
 } // namespace
 
@@ -175,13 +213,11 @@ bool Store::Migrate(const std::string& migrations_dir) {
         std::stringstream ss; ss << in.rdbuf();
         std::string sql = ss.str();
         std::string version = std::filesystem::path(f).filename().string();
-        // already applied?
-        std::string chk = "SELECT 1 FROM schema_migrations WHERE version='" +
-                           sql_escape(p_->conn, version) + "'";
-        if (mysql_query(p_->conn, chk.c_str()) == 0) {
-            MYSQL_RES* res = mysql_store_result(p_->conn);
-            if (res && mysql_num_rows(res) > 0) { mysql_free_result(res); continue; }
-            if (res) mysql_free_result(res);
+        // already applied? (exec_select: prepared, no concat)
+        {
+            auto chk = exec_select(p_->conn,
+                "SELECT 1 FROM schema_migrations WHERE version=?", {version});
+            if (!chk.empty()) continue;
         }
         for (const auto& stmt : split_sql(sql)) {
             if (mysql_query(p_->conn, stmt.c_str()) != 0) {
@@ -191,9 +227,17 @@ bool Store::Migrate(const std::string& migrations_dir) {
                 return false;
             }
         }
-        std::string ins = "INSERT INTO schema_migrations(version) VALUES('" +
-                          sql_escape(p_->conn, version) + "')";
-        mysql_query(p_->conn, ins.c_str());
+        {
+            PreparedStatement ins(p_->conn,
+                "INSERT INTO schema_migrations(version) VALUES(?)");
+            if (ins.valid()) {
+                MYSQL_BIND b[1] = {};
+                b[0].buffer_type = MYSQL_TYPE_STRING;
+                b[0].buffer = const_cast<char*>(version.c_str());
+                b[0].buffer_length = static_cast<unsigned long>(version.size());
+                if (ins.bind_param(b, 1)) ins.execute();
+            }
+        }
     }
     return true;
 }
@@ -395,20 +439,46 @@ static ImportRecord row_to_record(MYSQL_ROW row, unsigned long* lengths) {
     return r;
 }
 
+// String-row variant for exec_select() results; identical column order.
+static ImportRecord vec_to_record(const std::vector<std::string>& v) {
+    ImportRecord r;
+    auto str = [&v](int i) -> std::string {
+        return i < static_cast<int>(v.size()) ? v[i] : std::string{};
+    };
+    r.id = v.size() > 0 ? std::strtoll(v[0].c_str(), nullptr, 10) : 0;
+    r.sequence_id = v.size() > 1 ? std::strtoll(v[1].c_str(), nullptr, 10) : 0;
+    r.source_path = str(2);
+    r.source_hash = str(3);
+    r.output_path = str(4);
+    r.output_hash = str(5);
+    r.camera_model = str(6);
+    r.capture_date = str(7);
+    r.capture_time = str(8);
+    r.folder_schema = str(9);
+    r.conversion_settings = str(10);
+    r.status = ImportStatus::Completed;
+    std::string st = str(11);
+    if (st == "pending") r.status = ImportStatus::Pending;
+    else if (st == "converting") r.status = ImportStatus::Converting;
+    else if (st == "failed") r.status = ImportStatus::Failed;
+    else if (st == "restored") r.status = ImportStatus::Restored;
+    else if (st == "legacy") r.status = ImportStatus::Legacy;
+    r.orientation = v.size() > 12 ? std::atoi(v[12].c_str()) : 0;
+    r.created_at = str(13);
+    r.completed_at = str(14);
+    r.sequence_name = str(15);
+    return r;
+}
+
 std::optional<ImportRecord> Store::GetImportBySequence(const std::string& seq) {
-    std::string sql = "SELECT i.id, i.sequence_id, i.source_path, i.source_hash, i.output_path, "
+    auto rows = exec_select(p_->conn,
+        "SELECT i.id, i.sequence_id, i.source_path, i.source_hash, i.output_path, "
         "i.output_hash, i.camera_model, i.capture_date, i.capture_time, i.folder_schema, "
         "i.conversion_settings, i.status, i.orientation, i.created_at, i.completed_at, "
-        "s.name FROM imports i JOIN sequences s ON i.sequence_id=s.id WHERE s.name='"
-        + sql_escape(p_->conn, seq) + "'";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return std::nullopt;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    if (!res) return std::nullopt;
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (!row) { mysql_free_result(res); return std::nullopt; }
-    auto rec = row_to_record(row, mysql_fetch_lengths(res));
-    mysql_free_result(res);
-    return rec;
+        "s.name FROM imports i JOIN sequences s ON i.sequence_id=s.id WHERE s.name=?",
+        {seq});
+    if (rows.empty()) return std::nullopt;
+    return vec_to_record(rows[0]);
 }
 
 std::optional<ImportRecord> Store::GetImportById(int64_t id) {
@@ -428,58 +498,53 @@ std::optional<ImportRecord> Store::GetImportById(int64_t id) {
 }
 
 std::optional<ImportRecord> Store::GetImportByHash(const std::string& sha) {
-    std::string sql = "SELECT id, sequence_id, source_path, source_hash, output_path, "
+    auto rows = exec_select(p_->conn,
+        "SELECT id, sequence_id, source_path, source_hash, output_path, "
         "output_hash, camera_model, capture_date, capture_time, folder_schema, "
         "conversion_settings, status, orientation, created_at, completed_at, "
         "(SELECT name FROM sequences WHERE id=sequence_id) FROM imports "
-        "WHERE source_hash='" + sql_escape(p_->conn, sha) +
-        "' OR output_hash='" + sql_escape(p_->conn, sha) + "' LIMIT 1";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return std::nullopt;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    if (!res) return std::nullopt;
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (!row) { mysql_free_result(res); return std::nullopt; }
-    auto rec = row_to_record(row, mysql_fetch_lengths(res));
-    mysql_free_result(res);
-    return rec;
+        "WHERE source_hash=? OR output_hash=? LIMIT 1",
+        {sha, sha});
+    if (rows.empty()) return std::nullopt;
+    return vec_to_record(rows[0]);
 }
 
 std::optional<ImportRecord> Store::GetImportBySourcePath(const std::string& path) {
-    std::string sql = "SELECT id, sequence_id, source_path, source_hash, output_path, "
+    auto rows = exec_select(p_->conn,
+        "SELECT id, sequence_id, source_path, source_hash, output_path, "
         "output_hash, camera_model, capture_date, capture_time, folder_schema, "
         "conversion_settings, status, orientation, created_at, completed_at, "
         "(SELECT name FROM sequences WHERE id=sequence_id) FROM imports "
-        "WHERE source_path='" + sql_escape(p_->conn, path) + "' LIMIT 1";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return std::nullopt;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    if (!res) return std::nullopt;
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (!row) { mysql_free_result(res); return std::nullopt; }
-    auto rec = row_to_record(row, mysql_fetch_lengths(res));
-    mysql_free_result(res);
-    return rec;
+        "WHERE source_path=? LIMIT 1",
+        {path});
+    if (rows.empty()) return std::nullopt;
+    return vec_to_record(rows[0]);
 }
 
 std::optional<ImportRecord> Store::GetImportByOutputPath(const std::string& path) {
-    std::string sql = "SELECT id, sequence_id, source_path, source_hash, output_path, "
+    auto rows = exec_select(p_->conn,
+        "SELECT id, sequence_id, source_path, source_hash, output_path, "
         "output_hash, camera_model, capture_date, capture_time, folder_schema, "
         "conversion_settings, status, orientation, created_at, completed_at, "
         "(SELECT name FROM sequences WHERE id=sequence_id) FROM imports "
-        "WHERE output_path='" + sql_escape(p_->conn, path) + "' LIMIT 1";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return std::nullopt;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    if (!res) return std::nullopt;
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (!row) { mysql_free_result(res); return std::nullopt; }
-    auto rec = row_to_record(row, mysql_fetch_lengths(res));
-    mysql_free_result(res);
-    return rec;
+        "WHERE output_path=? LIMIT 1",
+        {path});
+    if (rows.empty()) return std::nullopt;
+    return vec_to_record(rows[0]);
 }
 
 bool Store::UpdateOutputHash(int64_t id, const std::string& new_hash) {
-    std::string sql = "UPDATE imports SET output_hash='" + sql_escape(p_->conn, new_hash) +
-                      "' WHERE id=" + std::to_string(id);
-    return mysql_query(p_->conn, sql.c_str()) == 0;
+    PreparedStatement stmt(p_->conn,
+        "UPDATE imports SET output_hash=? WHERE id=?");
+    if (!stmt.valid()) return false;
+    MYSQL_BIND bind[2] = {};
+    bind[0].buffer_type = MYSQL_TYPE_STRING;
+    bind[0].buffer = const_cast<char*>(new_hash.c_str());
+    bind[0].buffer_length = static_cast<unsigned long>(new_hash.size());
+    bind[1].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[1].buffer = static_cast<void*>(&id);
+    if (!stmt.bind_param(bind, 2)) return false;
+    return stmt.execute();
 }
 
 bool Store::UpdateOrientation(int64_t id, int orientation) {
@@ -491,13 +556,32 @@ bool Store::UpdateOrientation(int64_t id, int orientation) {
 bool Store::RecordPreviewEdit(int64_t import_id, const std::string& worker,
                               const std::string& prev_hash, const std::string& new_hash,
                               int width, int height, int quality) {
-    std::string sql = "INSERT INTO preview_edits (import_id, worker, previous_output_hash, "
-        "new_output_hash, preview_width, preview_height, preview_quality, edited_at) VALUES ("
-        + std::to_string(import_id) + ",'" + sql_escape(p_->conn, worker) + "','"
-        + sql_escape(p_->conn, prev_hash) + "','" + sql_escape(p_->conn, new_hash) + "',"
-        + std::to_string(width) + "," + std::to_string(height)
-        + "," + std::to_string(quality) + ", NOW())";
-    return mysql_query(p_->conn, sql.c_str()) == 0;
+    PreparedStatement stmt(p_->conn,
+        "INSERT INTO preview_edits (import_id, worker, previous_output_hash, "
+        "new_output_hash, preview_width, preview_height, preview_quality, edited_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+    if (!stmt.valid()) return false;
+
+    MYSQL_BIND bind[7] = {};
+    bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[0].buffer = static_cast<void*>(&import_id);
+    bind[1].buffer_type = MYSQL_TYPE_STRING;
+    bind[1].buffer = const_cast<char*>(worker.c_str());
+    bind[1].buffer_length = static_cast<unsigned long>(worker.size());
+    bind[2].buffer_type = MYSQL_TYPE_STRING;
+    bind[2].buffer = const_cast<char*>(prev_hash.c_str());
+    bind[2].buffer_length = static_cast<unsigned long>(prev_hash.size());
+    bind[3].buffer_type = MYSQL_TYPE_STRING;
+    bind[3].buffer = const_cast<char*>(new_hash.c_str());
+    bind[3].buffer_length = static_cast<unsigned long>(new_hash.size());
+    bind[4].buffer_type = MYSQL_TYPE_LONG;
+    bind[4].buffer = static_cast<void*>(&width);
+    bind[5].buffer_type = MYSQL_TYPE_LONG;
+    bind[5].buffer = static_cast<void*>(&height);
+    bind[6].buffer_type = MYSQL_TYPE_LONG;
+    bind[6].buffer = static_cast<void*>(&quality);
+    if (!stmt.bind_param(bind, 7)) return false;
+    return stmt.execute();
 }
 
 int64_t Store::InsertReconversion(int64_t import_id, const ReconversionJob& job) {
@@ -510,17 +594,44 @@ int64_t Store::InsertReconversion(int64_t import_id, const ReconversionJob& job)
         "\"jpeg_quality\":" + std::to_string(job.settings.jpeg_quality) + ","
         "\"linear\":" + (job.settings.linear ? "true" : "false") + "}";
     std::string sql = "INSERT INTO reconversions (import_id, previous_output_hash, "
-        "conversion_settings, reason, status, triggered_at) VALUES ("
-        + std::to_string(import_id) + ",'" + sql_escape(p_->conn, job.previous_output_hash) + "','"
-        + sql_escape(p_->conn, settings_json) + "','" + sql_escape(p_->conn, job.reason) + "','pending', NOW())";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return 0;
-    return static_cast<int64_t>(mysql_insert_id(p_->conn));
+        "conversion_settings, reason, status, triggered_at) VALUES (?, ?, ?, ?, 'pending', NOW())";
+    PreparedStatement stmt(p_->conn, sql);
+    if (!stmt.valid()) return 0;
+
+    MYSQL_BIND bind[4] = {};
+    bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[0].buffer = static_cast<void*>(&import_id);
+    bind[1].buffer_type = MYSQL_TYPE_STRING;
+    bind[1].buffer = const_cast<char*>(job.previous_output_hash.c_str());
+    bind[1].buffer_length = static_cast<unsigned long>(job.previous_output_hash.size());
+    bind[2].buffer_type = MYSQL_TYPE_STRING;
+    bind[2].buffer = const_cast<char*>(settings_json.c_str());
+    bind[2].buffer_length = static_cast<unsigned long>(settings_json.size());
+    bind[3].buffer_type = MYSQL_TYPE_STRING;
+    bind[3].buffer = const_cast<char*>(job.reason.c_str());
+    bind[3].buffer_length = static_cast<unsigned long>(job.reason.size());
+    if (!stmt.bind_param(bind, 4)) return 0;
+    if (!stmt.execute()) return 0;
+    return static_cast<int64_t>(stmt.insert_id());
 }
 
 bool Store::UpdateReconversion(int64_t id, const std::string& new_hash, ImportStatus status) {
-    std::string sql = "UPDATE reconversions SET new_output_hash='" + sql_escape(p_->conn, new_hash) +
-        "', status='" + to_string(status) + "', completed_at=NOW() WHERE id=" + std::to_string(id);
-    return mysql_query(p_->conn, sql.c_str()) == 0;
+    PreparedStatement stmt(p_->conn,
+        "UPDATE reconversions SET new_output_hash=?, status=?, completed_at=NOW() WHERE id=?");
+    if (!stmt.valid()) return false;
+
+    const std::string status_str = to_string(status);
+    MYSQL_BIND bind[3] = {};
+    bind[0].buffer_type = MYSQL_TYPE_STRING;
+    bind[0].buffer = const_cast<char*>(new_hash.c_str());
+    bind[0].buffer_length = static_cast<unsigned long>(new_hash.size());
+    bind[1].buffer_type = MYSQL_TYPE_STRING;
+    bind[1].buffer = const_cast<char*>(status_str.c_str());
+    bind[1].buffer_length = static_cast<unsigned long>(status_str.size());
+    bind[2].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[2].buffer = static_cast<void*>(&id);
+    if (!stmt.bind_param(bind, 3)) return false;
+    return stmt.execute();
 }
 
 bool Store::AcquireLock(int64_t import_id, const std::string& worker_id, int ttl_sec) {
@@ -603,13 +714,9 @@ bool Store::ReleaseLock(int64_t import_id) {
 }
 
 bool Store::HasOutputHash(const std::string& hash) {
-    std::string sql = "SELECT 1 FROM imports WHERE output_hash='" +
-                      sql_escape(p_->conn, hash) + "' LIMIT 1";
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return false;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    bool found = res && mysql_num_rows(res) > 0;
-    if (res) mysql_free_result(res);
-    return found;
+    auto rows = exec_select(p_->conn,
+        "SELECT 1 FROM imports WHERE output_hash=? LIMIT 1", {hash});
+    return !rows.empty();
 }
 
 bool Store::InsertAlert(const std::string& severity, const std::string& category,
@@ -661,24 +768,58 @@ std::vector<ImportRecord> Store::ListImports(int page, int limit,
                                              const std::string& status_filter,
                                              const std::string& camera_filter) {
     std::vector<ImportRecord> out;
+    // Optional filters are bound parameters; LIMIT/OFFSET are sanitized ints.
     std::string sql = "SELECT id, sequence_id, source_path, source_hash, output_path, "
         "output_hash, camera_model, capture_date, capture_time, folder_schema, "
         "conversion_settings, status, orientation, created_at, completed_at, "
         "(SELECT name FROM sequences WHERE id=sequence_id) FROM imports WHERE 1=1";
     if (!status_filter.empty())
-        sql += " AND status='" + sql_escape(p_->conn, status_filter) + "'";
+        sql += " AND status=?";
     if (!camera_filter.empty())
-        sql += " AND camera_model='" + sql_escape(p_->conn, camera_filter) + "'";
+        sql += " AND camera_model=?";
     sql += " ORDER BY id DESC LIMIT " + std::to_string(limit) +
            " OFFSET " + std::to_string((page - 1) * limit);
-    if (mysql_query(p_->conn, sql.c_str()) != 0) return out;
-    MYSQL_RES* res = mysql_store_result(p_->conn);
-    if (!res) return out;
-    MYSQL_ROW row;
-    while ((row = mysql_fetch_row(res))) {
-        out.push_back(row_to_record(row, mysql_fetch_lengths(res)));
+
+    PreparedStatement stmt(p_->conn, sql);
+    if (!stmt.valid()) return out;
+
+    std::vector<std::string> params;
+    if (!status_filter.empty()) params.push_back(status_filter);
+    if (!camera_filter.empty()) params.push_back(camera_filter);
+    if (!params.empty()) {
+        std::vector<MYSQL_BIND> pb(params.size());
+        for (size_t i = 0; i < params.size(); ++i) {
+            pb[i].buffer_type = MYSQL_TYPE_STRING;
+            pb[i].buffer = const_cast<char*>(params[i].c_str());
+            pb[i].buffer_length = static_cast<unsigned long>(params[i].size());
+        }
+        if (!stmt.bind_param(pb.data(), static_cast<unsigned>(pb.size()))) return out;
     }
-    mysql_free_result(res);
+    if (!stmt.execute()) return out;
+
+    MYSQL_RES* meta = mysql_stmt_result_metadata(stmt.get());
+    if (!meta) return out;
+    unsigned ncols = mysql_num_fields(meta);
+
+    constexpr unsigned long kBuf = 8192;
+    std::vector<char> buf(ncols * kBuf);
+    std::vector<unsigned long> lens(ncols, 0);
+    std::vector<MYSQL_BIND> rb(ncols);
+    for (unsigned i = 0; i < ncols; ++i) {
+        rb[i].buffer_type = MYSQL_TYPE_STRING;
+        rb[i].buffer = buf.data() + i * kBuf;
+        rb[i].buffer_length = kBuf;
+        rb[i].length = &lens[i];
+    }
+    if (!stmt.bind_result(rb.data(), ncols)) return out;
+
+    while (mysql_stmt_fetch(stmt.get()) == 0) {
+        std::vector<std::string> row(ncols);
+        for (unsigned i = 0; i < ncols; ++i)
+            row[i].assign(buf.data() + i * kBuf, lens[i]);
+        out.push_back(vec_to_record(row));
+    }
+    mysql_free_result(meta);
     return out;
 }
 

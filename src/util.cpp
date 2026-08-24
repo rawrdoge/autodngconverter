@@ -15,6 +15,7 @@
 #include <sys/sendfile.h>
 #else
 #include <windows.h>
+#include <sys/utime.h>
 #endif
 
 namespace rawimport {
@@ -71,10 +72,14 @@ bool ensure_dir(const std::string& path) {
 }
 
 bool touch_mtime(const std::string& path) {
-    std::error_code ec;
-    auto now = fs::file_time_type::clock::now();
-    fs::last_write_time(path, now, ec);
-    return !ec;
+#ifdef _WIN32
+    struct _utimbuf tb {};
+    tb.actime = tb.modtime = time(nullptr);
+    return _utime(path.c_str(), &tb) == 0;
+#else
+    // times = nullptr sets both atime and mtime to current time
+    return utimensat(AT_FDCWD, path.c_str(), nullptr, 0) == 0;
+#endif
 }
 
 std::string random_token() {
@@ -245,22 +250,23 @@ bool move_file(const std::string& from, const std::string& to) {
 #endif // !_WIN32
 }
 
-std::chrono::system_clock::time_point file_time_to_system(fs::file_time_type ft) {
-    // file_clock epochs are implementation-defined and differ wildly:
-    //   libstdc++ (C++20): 2174-01-01 UTC -> 74,510 days after the Unix epoch
-    //     (naive reinterpretation shifted dates -204y: 2026 mtime -> "1822")
-    //   MSVC:              Windows FILETIME epoch, 1601-01-01 UTC
-    // GCC 12 lacks clock_cast, hence explicit arithmetic.
-    using namespace std::chrono;
+bool file_mtime_tm(const std::string& path, std::tm& out) {
 #ifdef _WIN32
-    static constexpr auto kFileToSysOffset =
-        duration_cast<system_clock::duration>(seconds{INT64_C(-11644473600)});
+    struct _stat st {};
+    if (_stat(path.c_str(), &st) != 0) return false;
 #else
-    static constexpr auto kFileToSysOffset =
-        duration_cast<system_clock::duration>(days{74510});
+    struct stat st {};
+    if (stat(path.c_str(), &st) != 0) return false;
 #endif
-    return system_clock::time_point(
-        duration_cast<system_clock::duration>(ft.time_since_epoch()) + kFileToSysOffset);
+    time_t tt = st.st_mtime;
+    std::tm tm {};
+#ifdef _WIN32
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    out = tm;
+    return true;
 }
 
 } // namespace rawimport
