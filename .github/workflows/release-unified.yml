@@ -7,7 +7,9 @@ name: Unified Release (Docker image + Portable ZIP)
 on:
   push:
     tags: ["v*"]
-    tags-ignore: ["*portable*"]
+    # NOTE: 'tags-ignore' cannot be combined with 'tags' for one event
+    # (Actions lint rule). Portable-tag exclusion is done per-job below via
+    # if: ${{ !contains(github.ref, 'portable') }}.
 
 permissions:
   contents: write     # create the GitHub Release
@@ -23,6 +25,7 @@ jobs:
   # Job A: Docker image from the tagged ref (main line, MariaDB product)
   # ------------------------------------------------------------------
   build-docker:
+    if: ${{ !contains(github.ref, 'portable') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (tagged ref, with submodules)
@@ -108,12 +111,15 @@ jobs:
   # Job B: Windows portable ZIP from the portable branch (parallel)
   # ------------------------------------------------------------------
   build-portable:
+    if: ${{ !contains(github.ref, 'portable') }}
     runs-on: windows-latest
     env:
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
     steps:
-      - name: Checkout portable branch
-        uses: actions/checkout@v7
+      # Intentionally checks out 'portable' branch, not the triggering tag.
+      # The portable binary is always built from the latest portable branch
+      # and bundled into the main-branch release.
+      - uses: actions/checkout@v7
         with:
           ref: portable
 
