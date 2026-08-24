@@ -114,7 +114,8 @@ jobs:
     if: ${{ !contains(github.ref, 'portable') }}
     runs-on: windows-latest
     env:
-      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      # Forward slash: a double-quoted '\v' would be a YAML vertical-tab escape.
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
     steps:
       # Intentionally checks out 'portable' branch, not the triggering tag.
       # The portable binary is always built from the latest portable branch
