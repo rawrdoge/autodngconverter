@@ -1,4 +1,4 @@
-# Package the portable Windows ZIP (action plan §5 Phase 5).
+﻿# Package the portable Windows ZIP (action plan §5 Phase 5).
 # Usage: powershell -File scripts\package-portable.ps1 [-Version 2.1.0]
 #        [-DnglabBin <path>] [-ExiftoolBin <path>]
 # Builds nothing; run scripts\build-windows.bat first. Stages:
@@ -35,26 +35,28 @@ $toolSpecs = @(
 )
 foreach ($t in $toolSpecs) {
     $dest = Join-Path $stage ("tools\" + $t.Name + ".exe")
+    $src = $null
     if ($t.Given -and (Test-Path $t.Given)) {
-        Copy-Item $t.Given $dest
-        Write-Host "bundled $($t.Name) from $($t.Given)"
-        continue
+        $src = $t.Given
+    } else {
+        $candidates = @(
+            (Join-Path $repo ("tools\" + $t.Name + ".exe")),
+            (Join-Path $repo ("tools\" + $t.Name))
+        )
+        $src = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     }
-    $candidates = @(
-        (Join-Path $repo ("tools\" + $t.Name + ".exe")),
-        (Join-Path $repo ("tools\" + $t.Name))
-    )
-    $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if ($found) {
-        Copy-Item $found $dest
-        Write-Host "bundled $($t.Name) from $found"
+    if ($src) {
+        Copy-Item $src $dest
+        Write-Host "bundled $($t.Name) from $src"
         # exiftool's Windows build requires its exiftool_files/ directory
         # beside the exe (contains the Perl runtime) — carry it along.
         if ($t.Name -eq 'exiftool') {
-            $filesDir = Join-Path (Split-Path -Parent $found) 'exiftool_files'
+            $filesDir = Join-Path (Split-Path -Parent $src) 'exiftool_files'
             if (Test-Path $filesDir) {
                 Copy-Item $filesDir (Join-Path $stage 'tools\exiftool_files') -Recurse -Force
                 Write-Host 'bundled exiftool_files'
+            } else {
+                Write-Warning "exiftool_files/ not found next to $src — exiftool will NOT run without it"
             }
         }
     } else {
