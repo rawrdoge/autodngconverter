@@ -114,8 +114,10 @@ jobs:
     if: ${{ !contains(github.ref, 'portable') }}
     runs-on: windows-latest
     env:
-      # Forward slash: a double-quoted '\v' would be a YAML vertical-tab escape.
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      # RI_VCPKG_ROOT (ours) instead of VCPKG_ROOT: msvc-dev-cmd imports the
+      # runner's Visual Studio-bundled vcpkg path as VCPKG_ROOT, which would
+      # otherwise override our bootstrapped clone.
+      RI_VCPKG_ROOT: ${{ github.workspace }}/vcpkg
     steps:
       # Intentionally checks out 'portable' branch, not the triggering tag.
       # The portable binary is always built from the latest portable branch
@@ -138,13 +140,18 @@ jobs:
       - name: Bootstrap vcpkg (skipped on cache hit)
         shell: pwsh
         run: |
-          if (!(Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
-            git clone --depth=1 https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
-            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          if (!(Test-Path "$env:RI_VCPKG_ROOT\vcpkg.exe")) {
+            git clone --depth=1 https://github.com/microsoft/vcpkg.git "$env:RI_VCPKG_ROOT"
+            & "$env:RI_VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           }
 
       - name: Build rawimport-pipeline.exe
         shell: cmd
+        env:
+          # Step-level env beats what msvc-dev-cmd imported from the runner's
+          # Visual Studio environment (which ships VS 18, not VS 17).
+          RI_VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          CMAKE_GENERATOR: Visual Studio 18 2026
         run: scripts\build-windows.bat
 
       # Pinned external tools (hashes cross-checked against upstream digests).
