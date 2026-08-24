@@ -165,7 +165,9 @@ jobs:
             "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-win-x64_v0.7.2.zip"
           echo "6a50649768213ada4a06d973a91af5a5714dc40d6402ec9fe2a1f5f80aaafe23  dnglab.zip" | sha256sum -c -
           unzip -j dnglab.zip -d tools/
-          curl -fsSL -o exiftool.zip "https://exiftool.org/exiftool-13.59_64.zip"
+          # exiftool.org no longer serves direct file URLs (404) — official
+          # SourceForge mirror; identical bytes (sha256 below re-verified).
+          curl -fsSL -o exiftool.zip "https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download"
           echo "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec  exiftool.zip" | sha256sum -c -
           unzip -o -q exiftool.zip -d ext/
           mv "ext/exiftool(-k).exe" tools/exiftool.exe
