@@ -15,6 +15,7 @@
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <condition_variable>
 
 namespace rawimport {
@@ -33,6 +34,9 @@ struct Worker::Impl {
     // Persistent per-file failure counter (PRD §6.3). Erased only on success
     // or when the file is dead-lettered / disappears from /watch.
     std::unordered_map<std::string, int> fail_counts;
+    // Files currently owned by a worker thread (D24): the poller must not
+    // requeue them mid-conversion.
+    std::unordered_set<std::string> inflight;
     // Fast-fingerprint cache (PRD §5.3 / amendment ruling #2): path -> last
     // known (size, mtime, FNV-1a-of-first-4KB) plus the SHA-256 computed at
     // that time. A matching fingerprint proves the file is byte-identical to
@@ -149,6 +153,10 @@ void Worker::PollLoop() {
                     {
                         std::lock_guard<std::mutex> lk(p_->mtx);
                         std::string path = e.path().string();
+                        // Skip files a worker is actively processing (D24):
+                        // without this, slow conversions get requeued
+                        // mid-flight and a second thread races on the source.
+                        if (p_->inflight.count(path)) continue;
                         auto it = p_->seen.find(path);
                         if (it != p_->seen.end()) {
                             // Already known: do NOT refresh last_seen.
@@ -223,6 +231,7 @@ void Worker::WorkerThread() {
             p_->files.pop();
             p_->queue_depth.fetch_sub(1);
             p_->active_workers.fetch_add(1);
+            p_->inflight.insert(path);
         }
         
         ProcessFile(path, worker_store);
@@ -301,6 +310,7 @@ void Worker::ProcessFile(const std::string& path, Store& store) {
         } else {
             SPDLOG_WARN("[worker] duplicate left in place (archive move failed): {}", path);
         }
+        release_inflight(path);
         return;
     }
     
@@ -399,6 +409,12 @@ void Worker::ProcessFile(const std::string& path, Store& store) {
         Metrics::instance().inc_conversions_completed("failed", 1);
         move_to_dead_letter(path, store);
     }
+    release_inflight(path);
+}
+
+void Worker::release_inflight(const std::string& path) {
+    std::lock_guard<std::mutex> lk(p_->mtx);
+    p_->inflight.erase(path);
 }
 
 void Worker::evict_fp_cache() {
@@ -415,8 +431,11 @@ void Worker::evict_fp_cache() {
 }
 
 void Worker::move_to_dead_letter(const std::string& path, Store& store) {
+    // This failure path is terminal for this pass: release the in-flight
+    // marker so the poller may requeue (retry) the file.
+    release_inflight(path);
+
     // Increment the persistent failure counter outside the TTL map so the
-    // count survives seen-map eviction (fixes §6.3 infinite-retry regression).
     int new_retry = 0;
     bool should_dead_letter = false;
     {
