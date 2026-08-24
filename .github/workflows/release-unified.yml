@@ -210,21 +210,23 @@ jobs:
           files: release-assets/*
           fail_on_unmatched_files: true
           body: |
-            ## RawImport ${{ github.ref_name }} — pick your path
+            ## RawImport ${{ github.ref_name }}
 
-            ### 🖥️ NAS / Docker users (full MariaDB-powered deployment)
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ```
-            Or download the attached tarball and load it offline:
-            ```bash
-            docker load -i rawimport-${{ github.ref_name }}-docker-image.tar.gz
-            ```
+            Two artifacts are published per release. Both provide the same RAW-to-DNG conversion pipeline and differ in storage backend and packaging.
 
-            ### 📦 Windows layman users (no install, no database server)
-            Download the **rawimport-portable-*-win-x64.zip** asset below, then:
-            1. Unzip anywhere.
-            2. Drop RAW files (NRW, NEF, CR2, ARW) into the `watch/` folder.
-            3. DNGs appear in `output/`; originals move to `archive/`.
+            ### Docker image (server / NAS deployment)
+            MariaDB-backed pipeline for continuous operation.
+            - Pull: `docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
+            - Offline load: attach `rawimport-${{ github.ref_name }}-docker-image.tar.gz`, then run `docker load -i <file>`
 
-            Everything runs locally — the portable build never contacts the internet.
+            ### Windows standalone binary (x64)
+            Self-contained converter with embedded SQLite storage. No installation, external services, or network access are required at runtime.
+            - Asset: `rawimport-portable-${{ github.ref_name }}-win-x64.zip`
+
+            Operation:
+            1. Extract the archive to any writable directory.
+            2. Place supported RAW files (NRW, NEF, CR2, ARW) into the `watch/` directory.
+            3. Converted DNG output is written to `output/<year>/<month>/`; processed originals are moved to `archive/<year>/<month>/`.
+            4. Files that fail conversion after the configured retry limit are moved to `archive/failed/`.
+
+            Configuration defaults require no setup. Optional settings are documented in `.env.example` within the archive.
