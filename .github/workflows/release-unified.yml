@@ -170,8 +170,9 @@ jobs:
           curl -fsSL -o exiftool.zip "https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download"
           echo "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec  exiftool.zip" | sha256sum -c -
           unzip -o -q exiftool.zip -d ext/
-          mv "ext/exiftool(-k).exe" tools/exiftool.exe
-          mv ext/exiftool_files tools/exiftool_files
+          # Archive nests under a versioned top-level dir (exiftool-13.59_64/)
+          mv "ext/exiftool-13.59_64/exiftool(-k).exe" tools/exiftool.exe
+          mv "ext/exiftool-13.59_64/exiftool_files" tools/exiftool_files
 
       - name: Package portable ZIP
         shell: pwsh
