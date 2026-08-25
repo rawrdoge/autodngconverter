@@ -8,24 +8,30 @@
 
 namespace rawimport {
 
-// Starts the HTTP server (drogon or cpp-httplib) on cfg.http_port and blocks.
-// Routes (PRD §8):
+class CctWorker;
+class RotationManager;
+
+// Routes (PRD §8 + PRD-CCT-001 §8):
 //   GET  /health
-//   GET  /api/v1/imports
-//   GET  /api/v1/imports/:seq
-//   GET  /api/v1/imports/hash/:sha
-//   POST /api/v1/imports/:seq/reconvert
+//   GET  /ready
+//   GET  /metrics
 //   GET  /api/v1/stats
 //   GET  /api/v1/alerts
-//   GET  /api/v1/imports/by-source?path=
+//   GET  /api/v1/imports            (+ :seq, /hash/:sha, by-source variants)
+//   POST /api/v1/imports/:seq/reconvert
 //   POST /api/v1/imports/by-path/preview-updated
-//   POST /api/v1/imports/by-source/rotation-updated   (NEW, rotation sync)
+//   POST /api/v1/imports/by-source/rotation-updated
+//   POST /api/v1/cct/analyze        (requires cct_worker)
+//   GET  /api/v1/cct/result         (requires cct_worker)
+//   GET  /api/v1/cct/list           (requires cct_worker)
 //
-// rotation_mgr may be nullptr if rotation sync is disabled; the endpoint then
-// returns 503.
+// cct_worker may be nullptr when CCT is disabled/undeployable; the /cct/*
+// endpoints then answer 503.
 class ApiServer {
 public:
-    ApiServer(const Config& cfg, Store& store, class RotationManager* rotation_mgr);
+    ApiServer(const Config& cfg, Store& store,
+              RotationManager* rotation_mgr = nullptr,
+              CctWorker* cct_worker = nullptr);
     ~ApiServer();
 
     // Run the server loop (blocking). Returns on stop signal.

@@ -61,6 +61,11 @@ struct Config {
     std::string immich_token;
     std::string digikam_rescan = "touch";   // touch | dbus
 
+    // CCT analysis plugin (PRD-CCT-001 §11.3)
+    bool cct_enabled = true;                // enable /api/v1/cct/* endpoints + worker
+    std::string cct_engine = "rawpy_grayworld";
+    int cct_queue_size = 50;
+
     // Lua plugin facing
     std::string api_token;        // optional bearer for Lua->API
 };

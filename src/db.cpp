@@ -849,4 +849,133 @@ MYSQL* Store::CreateConnection(const Config& cfg) {
     return conn;
 }
 
+// ---- CCT analysis results (PRD-CCT-001 §4.2) ----
+
+// Column order for all cct_results selects.
+static Store::CctResult vec_to_cct(const std::vector<std::string>& v) {
+    auto s = [&v](size_t i) { return i < v.size() ? v[i] : std::string{}; };
+    auto d = [&v](size_t i) {
+        return i < v.size() ? std::strtod(v[i].c_str(), nullptr) : 0.0;
+    };
+    auto l = [&](size_t i) {
+        return i < v.size() ? std::strtoll(v[i].c_str(), nullptr, 10) : int64_t{0};
+    };
+    Store::CctResult r;
+    r.id            = l(0);
+    r.import_id     = l(1);
+    r.sequence_name = s(2);
+    r.algorithm     = s(3);
+    r.cct_kelvin    = d(4);
+    r.tint          = d(5);
+    r.xy_x          = d(6);
+    r.xy_y          = d(7);
+    r.hue           = d(8);
+    r.chroma        = d(9);
+    r.confidence    = d(10);
+    r.sampled_area  = s(11);
+    r.source_used   = s(12);
+    r.status        = s(13);
+    r.error_msg     = s(14);
+    r.created_at    = s(15);
+    r.completed_at  = s(16);
+    return r;
+}
+
+int64_t Store::InsertCctJob(int64_t import_id, const std::string& sequence_name,
+                            const std::string& algorithm,
+                            const std::string& sampled_area) {
+    PreparedStatement stmt(p_->conn,
+        "INSERT INTO cct_results (import_id, sequence_name, algorithm, sampled_area) "
+        "VALUES (?, ?, ?, ?)");
+    if (!stmt.valid()) return 0;
+
+    MYSQL_BIND bind[4] = {};
+    bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[0].buffer      = static_cast<void*>(&import_id);
+
+    std::string algo = algorithm.empty() ? "rawpy_grayworld" : algorithm;
+    std::string area = sampled_area.empty() ? "full" : sampled_area;
+
+    bind[1].buffer_type   = MYSQL_TYPE_STRING;
+    bind[1].buffer        = const_cast<char*>(sequence_name.c_str());
+    bind[1].buffer_length = static_cast<unsigned long>(sequence_name.size());
+    bind[2].buffer_type   = MYSQL_TYPE_STRING;
+    bind[2].buffer        = const_cast<char*>(algo.c_str());
+    bind[2].buffer_length = static_cast<unsigned long>(algo.size());
+    bind[3].buffer_type   = MYSQL_TYPE_STRING;
+    bind[3].buffer        = const_cast<char*>(area.c_str());
+    bind[3].buffer_length = static_cast<unsigned long>(area.size());
+
+    if (!stmt.bind_param(bind, 4) || !stmt.execute()) return 0;
+    return static_cast<int64_t>(stmt.insert_id());
+}
+
+bool Store::UpdateCctResult(int64_t id, const CctResult& r) {
+    PreparedStatement stmt(p_->conn,
+        "UPDATE cct_results SET status=?, cct_kelvin=?, tint=?, xy_x=?, xy_y=?, "
+        "hue=?, chroma=?, confidence=?, error_msg=?, source_used=?, "
+        "completed_at=IF(? IN ('completed','failed'), NOW(), completed_at) "
+        "WHERE id=?");
+    if (!stmt.valid()) return false;
+
+    std::string status = r.status.empty() ? "running" : r.status;
+    std::string src    = r.source_used.empty() ? "raw" : r.source_used;
+    std::string err    = r.error_msg;
+    std::string term   = status; // for the IF() comparison below
+
+    // MYSQL_BIND.buffer is void* (non-const): bind local copies, not the
+    // const-ref members.
+    double cct = r.cct_kelvin, tint = r.tint, xy_x = r.xy_x, xy_y = r.xy_y;
+    double hue = r.hue, chroma = r.chroma, confidence = r.confidence;
+
+    MYSQL_BIND bind[12] = {};
+    bind[0].buffer_type   = MYSQL_TYPE_STRING;
+    bind[0].buffer        = status.data();
+    bind[0].buffer_length = static_cast<unsigned long>(status.size());
+    bind[1].buffer_type = MYSQL_TYPE_DOUBLE; bind[1].buffer = &cct;
+    bind[2].buffer_type = MYSQL_TYPE_DOUBLE; bind[2].buffer = &tint;
+    bind[3].buffer_type = MYSQL_TYPE_DOUBLE; bind[3].buffer = &xy_x;
+    bind[4].buffer_type = MYSQL_TYPE_DOUBLE; bind[4].buffer = &xy_y;
+    bind[5].buffer_type = MYSQL_TYPE_DOUBLE; bind[5].buffer = &hue;
+    bind[6].buffer_type = MYSQL_TYPE_DOUBLE; bind[6].buffer = &chroma;
+    bind[7].buffer_type = MYSQL_TYPE_DOUBLE; bind[7].buffer = &confidence;
+    bind[8].buffer_type   = MYSQL_TYPE_STRING;
+    bind[8].buffer        = err.data();
+    bind[8].buffer_length = static_cast<unsigned long>(err.size());
+    bind[9].buffer_type   = MYSQL_TYPE_STRING;
+    bind[9].buffer        = src.data();
+    bind[9].buffer_length = static_cast<unsigned long>(src.size());
+    bind[10].buffer_type   = MYSQL_TYPE_STRING;
+    bind[10].buffer        = term.data();
+    bind[10].buffer_length = static_cast<unsigned long>(term.size());
+    bind[11].buffer_type = MYSQL_TYPE_LONGLONG;
+    bind[11].buffer      = static_cast<void*>(&id);
+
+    return stmt.bind_param(bind, 12) && stmt.execute();
+}
+
+std::optional<Store::CctResult> Store::GetCctResult(int64_t import_id,
+                                                    const std::string& algorithm) {
+    auto rows = exec_select(p_->conn,
+        "SELECT id, import_id, sequence_name, algorithm, cct_kelvin, tint, xy_x, "
+        "xy_y, hue, chroma, confidence, sampled_area, source_used, status, "
+        "error_msg, created_at, completed_at FROM cct_results "
+        "WHERE import_id=? AND algorithm=? ORDER BY id DESC LIMIT 1",
+        {std::to_string(import_id), algorithm});
+    if (rows.empty()) return std::nullopt;
+    return vec_to_cct(rows[0]);
+}
+
+std::vector<Store::CctResult> Store::ListCctResults(int64_t import_id) {
+    std::vector<Store::CctResult> out;
+    auto rows = exec_select(p_->conn,
+        "SELECT id, import_id, sequence_name, algorithm, cct_kelvin, tint, xy_x, "
+        "xy_y, hue, chroma, confidence, sampled_area, source_used, status, "
+        "error_msg, created_at, completed_at FROM cct_results "
+        "WHERE import_id=? ORDER BY id ASC",
+        {std::to_string(import_id)});
+    for (auto& row : rows) out.push_back(vec_to_cct(row));
+    return out;
+}
+
 } // namespace rawimport

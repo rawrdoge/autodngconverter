@@ -71,6 +71,42 @@ public:
     bool InsertAlert(const std::string& severity, const std::string& category,
                      const std::string& message, const std::string& ref_sequence = "");
 
+    // ---- CCT analysis results (PRD-CCT-001 §4.2) ----
+    struct CctResult {
+        int64_t id = 0;
+        int64_t import_id = 0;
+        std::string sequence_name;
+        std::string algorithm;
+        double cct_kelvin = 0;
+        double tint = 0;
+        double xy_x = 0;
+        double xy_y = 0;
+        double hue = 0;       // radians, D50-adapted
+        double chroma = 0;    // D50-adapted distance
+        double confidence = 0;
+        std::string sampled_area;
+        std::string source_used;
+        std::string status;
+        std::string error_msg;
+        std::string created_at;
+        std::string completed_at;
+    };
+
+    // Insert a pending job. Returns new row id (0 on failure).
+    int64_t InsertCctJob(int64_t import_id, const std::string& sequence_name,
+                         const std::string& algorithm, const std::string& sampled_area);
+
+    // Update result after analysis completes or fails. Sets completed_at
+    // automatically for terminal statuses.
+    bool UpdateCctResult(int64_t id, const CctResult& r);
+
+    // Latest result for an import + algorithm (nullopt if none).
+    std::optional<CctResult> GetCctResult(int64_t import_id,
+                                          const std::string& algorithm);
+
+    // All results for an import, oldest first.
+    std::vector<CctResult> ListCctResults(int64_t import_id);
+
     // Stats for /api/v1/stats.
     struct Stats {
         int64_t total = 0;

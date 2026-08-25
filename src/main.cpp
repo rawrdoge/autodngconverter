@@ -3,6 +3,8 @@
 #include "config.h"
 #include "db.h"
 #include "converter.h"
+#include "cct_engine.h"
+#include "cct_worker.h"
 #include "rotation.h"
 #include "reconcile.h"
 #include "api.h"
@@ -62,8 +64,29 @@ int main(int argc, char** argv) {
         SPDLOG_INFO("[main] preview embedder '{}' available", embedder->Name());
     }
 
+    // CCT analysis plugin (PRD-CCT-001 §11): optional. Degrades gracefully —
+    // unknown engine name or missing python3/rawpy simply disables /api/v1/cct/*.
+    CctEngine* cct_engine = nullptr;
+    CctWorker* cct_worker = nullptr;
+    if (cfg.cct_enabled) {
+        cct_engine = MakeCctEngine(cfg.cct_engine);
+        if (!cct_engine) {
+            SPDLOG_ERROR("[main] unknown CCT_ENGINE '{}'; CCT disabled",
+                         cfg.cct_engine);
+        } else if (!cct_engine->Available()) {
+            SPDLOG_WARN("[main] CCT engine '{}' unavailable "
+                        "(python3 with rawpy/colour/numpy required); CCT disabled",
+                        cfg.cct_engine);
+            delete cct_engine;
+            cct_engine = nullptr;
+        } else {
+            SPDLOG_INFO("[main] CCT engine '{}' available", cfg.cct_engine);
+        }
+    }
+    if (cct_engine) cct_worker = new CctWorker(store, cct_engine);
+
     RotationManager rotation(cfg, store);
-    ApiServer api(cfg, store, &rotation);
+    ApiServer api(cfg, store, &rotation, cct_worker);
     Worker worker(cfg, store, engine, embedder);
 
     // signal handling for graceful shutdown
@@ -72,6 +95,10 @@ int main(int argc, char** argv) {
 
     worker.Start();
     SPDLOG_INFO("[main] worker started");
+    if (cct_worker) {
+        cct_worker->Start();
+        SPDLOG_INFO("[main] cct worker started");
+    }
     api.Run();
     SPDLOG_INFO("[main] API server running on port {}", cfg.http_port);
 
@@ -87,6 +114,12 @@ int main(int argc, char** argv) {
     SPDLOG_INFO("[main] worker stopped");
     rotation.Stop();
     SPDLOG_INFO("[main] rotation manager stopped");
+    if (cct_worker) {
+        cct_worker->Stop();
+        delete cct_worker;
+        SPDLOG_INFO("[main] cct worker stopped");
+    }
+    delete cct_engine;
     store.Close();
     SPDLOG_INFO("[main] database connection closed");
     delete engine;

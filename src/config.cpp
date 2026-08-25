@@ -96,6 +96,11 @@ Config LoadConfig() {
     c.immich_token = env_or("IMMICH_TOKEN", c.immich_token);
     c.digikam_rescan = env_or("DIGIKAM_RESCAN", c.digikam_rescan);
 
+    // CCT analysis plugin (PRD-CCT-001 §11.3)
+    c.cct_enabled = env_bool("CCT_ENABLED", c.cct_enabled);
+    c.cct_engine = env_or("CCT_ENGINE", c.cct_engine);
+    c.cct_queue_size = env_int("CCT_QUEUE_SIZE", c.cct_queue_size);
+
     c.api_token = env_or("API_TOKEN", c.api_token);
 
     return c;

@@ -1,6 +1,8 @@
 #include "api.h"
 #include "config.h"
 #include "db.h"
+#include "cct_worker.h"
+#include "cct_engine.h"
 #include "rotation.h"
 #include "pipeline.h"
 #include "metrics.h"
@@ -33,14 +35,17 @@ struct ApiServer::Impl {
     const Config* cfg = nullptr;
     Store* store = nullptr;
     RotationManager* rotation_mgr = nullptr;
+    CctWorker* cct = nullptr;
 };
 
-ApiServer::ApiServer(const Config& cfg, Store& store, RotationManager* rotation_mgr)
+ApiServer::ApiServer(const Config& cfg, Store& store,
+                     RotationManager* rotation_mgr, CctWorker* cct_worker)
     : cfg_(cfg), store_(store), rotation_mgr_(rotation_mgr),
       p_(std::make_unique<Impl>()) {
     p_->cfg = &cfg;
     p_->store = &store;
     p_->rotation_mgr = rotation_mgr;
+    p_->cct = cct_worker;
 }
 
 ApiServer::~ApiServer() { Stop(); }
@@ -138,6 +143,26 @@ std::string json_get(const std::string& body, const std::string& key) {
     size_t end = pos;
     while (end < body.size() && body[end] != ',' && body[end] != '}' && body[end] != ' ') ++end;
     return body.substr(pos, end - pos);
+}
+
+// Serialize a CCT result row (PRD-CCT-001 §8.2/§8.3).
+std::string cct_result_json(const Store::CctResult& r) {
+    std::ostringstream os;
+    os << "{\"algorithm\":\"" << json_escape(r.algorithm) << "\","
+       << "\"cct_kelvin\":" << r.cct_kelvin << ","
+       << "\"tint\":" << r.tint << ","
+       << "\"xy\":[" << r.xy_x << "," << r.xy_y << "],"
+       << "\"hue\":" << r.hue << ","
+       << "\"chroma\":" << r.chroma << ","
+       << "\"confidence\":" << r.confidence << ","
+       << "\"status\":\"" << json_escape(r.status) << "\","
+       << "\"sampled_area\":\"" << json_escape(r.sampled_area) << "\"";
+    if (!r.completed_at.empty())
+        os << ",\"completed_at\":\"" << json_escape(r.completed_at) << "\"";
+    if (!r.error_msg.empty())
+        os << ",\"error\":\"" << json_escape(r.error_msg) << "\"";
+    os << "}";
+    return os.str();
 }
 
 void handle(int fd, ApiServer::Impl* p) {
@@ -335,6 +360,102 @@ void handle(int fd, ApiServer::Impl* p) {
         if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
         p->rotation_mgr->Queue(r->id, r->output_path, orient, client);
         send_response(fd, 200, "{\"status\":\"queued\"}");
+        return;
+    }
+
+    // ---- CCT analysis endpoints (PRD-CCT-001 §8) ----
+    if (method == "POST" && path == "/api/v1/cct/analyze") {
+        if (!p->cct) { send_response(fd, 503, "{\"error\":\"cct-disabled\"}"); return; }
+        size_t bpos = req.find("\r\n\r\n");
+        std::string body = (bpos != std::string::npos) ? req.substr(bpos + 4) : "";
+        std::string seq = json_get(body, "sequence");
+        std::string algo = json_get(body, "algorithm");
+        std::string area = json_get(body, "area");
+        if (seq.empty()) {
+            send_response(fd, 400, "{\"error\":\"missing-sequence\"}");
+            return;
+        }
+        auto rec = store.GetImportBySequence(seq);
+        if (!rec) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
+
+        std::string algo_full = algo.empty() ? "rawpy_grayworld" : algo;
+        if (!CctAlgorithmSupported(algo_full)) {
+            send_response(fd, 400, "{\"error\":\"unsupported-algorithm\"}");
+            return;
+        }
+
+        int64_t job_id = store.InsertCctJob(rec->id, seq, algo_full,
+                                            area.empty() ? "full" : area);
+        if (job_id == 0) {
+            send_response(fd, 500, "{\"error\":\"insert-failed\"}");
+            return;
+        }
+        CctWorker::Job job;
+        job.id = job_id;
+        job.import_id = rec->id;
+        job.sequence_name = seq;
+        job.algorithm = algo_full;
+        job.sampled_area = area.empty() ? "full" : area;
+        job.raw_path = rec->source_path;   // archived original (worker reads it)
+        job.dng_path = rec->output_path;
+        if (!p->cct->Queue(job)) {
+            Store::CctResult failed;
+            failed.id = job_id;
+            failed.status = "failed";
+            failed.error_msg = "queue full";
+            store.UpdateCctResult(job_id, failed);
+            send_response(fd, 503, "{\"error\":\"queue-full\"}");
+            return;
+        }
+        std::ostringstream os;
+        os << "{\"job_id\":" << job_id << ",\"sequence\":\"" << json_escape(seq)
+           << "\",\"status\":\"queued\"}";
+        SPDLOG_INFO("[api] cct analyze queued: {} job={}", seq, job_id);
+        send_response(fd, 200, os.str());
+        return;
+    }
+    if (method == "GET" && path == "/api/v1/cct/result") {
+        std::string seq = q.count("sequence") ? q["sequence"] : "";
+        std::string algo = (q.count("algorithm") && !q["algorithm"].empty())
+                               ? q["algorithm"] : "rawpy_grayworld";
+        if (seq.empty()) {
+            send_response(fd, 400, "{\"error\":\"missing-sequence\"}");
+            return;
+        }
+        auto rec = store.GetImportBySequence(seq);
+        if (!rec) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
+        auto r = store.GetCctResult(rec->id, algo);
+        if (!r) { send_response(fd, 404, "{\"error\":\"no-result\"}"); return; }
+        if (r->status == "pending" || r->status == "running") {
+            std::ostringstream os;
+            os << "{\"sequence\":\"" << json_escape(seq) << "\",\"algorithm\":\""
+               << json_escape(r->algorithm) << "\",\"status\":\"" << r->status << "\"}";
+            send_response(fd, 202, os.str());
+            return;
+        }
+        std::ostringstream os;
+        os << "{\"sequence\":\"" << json_escape(seq) << "\","
+           << cct_result_json(*r) << "}";
+        send_response(fd, 200, os.str());
+        return;
+    }
+    if (method == "GET" && path == "/api/v1/cct/list") {
+        std::string seq = q.count("sequence") ? q["sequence"] : "";
+        if (seq.empty()) {
+            send_response(fd, 400, "{\"error\":\"missing-sequence\"}");
+            return;
+        }
+        auto rec = store.GetImportBySequence(seq);
+        if (!rec) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
+        auto rows = store.ListCctResults(rec->id);
+        std::ostringstream os;
+        os << "{\"sequence\":\"" << json_escape(seq) << "\",\"results\":[";
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (i) os << ",";
+            os << cct_result_json(rows[i]);
+        }
+        os << "]}";
+        send_response(fd, 200, os.str());
         return;
     }
 

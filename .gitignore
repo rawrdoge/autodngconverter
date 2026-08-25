@@ -41,3 +41,7 @@ CLAUDE.md
 # Windows native build
 build-win/
 vcpkg_installed/
+
+# Local packaging output & python cache
+dist/
+__pycache__/

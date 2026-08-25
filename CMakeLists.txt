@@ -43,6 +43,9 @@ add_executable(rawimport-pipeline
   src/worker.cpp
   src/metrics.cpp
   src/exiftool_daemon.cpp
+  src/cct_engine.cpp        # CCT plugin (PRD-CCT-001)
+  src/cct_rawpy_engine.cpp  # CCT plugin
+  src/cct_worker.cpp        # CCT plugin
 )
 
 # cxxopts: header-only, vendored at src/vendor/cxxopts.hpp
@@ -73,4 +76,5 @@ endif()
 
 # Migrations must be bundled into the runtime image (PRD §10 fix).
 install(DIRECTORY migrations DESTINATION /app)
+install(FILES scripts/cct_analyze.py DESTINATION /app/scripts)  # CCT plugin (PRD-CCT-001)
 install(TARGETS rawimport-pipeline DESTINATION /usr/local/bin)

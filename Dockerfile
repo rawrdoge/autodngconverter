@@ -44,13 +44,19 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 libmariadb3 libspdlog1.10 \
     ca-certificates exiftool libexif12 \
+    python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
+# CCT analysis deps (PRD-CCT-001 §11.2)
+    && pip3 install --no-cache-dir --break-system-packages \
+       rawpy colour-science numpy \
     && useradd -u 10001 -m appuser
 
 WORKDIR /app
 COPY --from=build /src/build/rawimport-pipeline /usr/local/bin/
 COPY --from=build /usr/local/bin/dnglab /usr/local/bin/dnglab
 COPY migrations /db/migrations/
+# CCT analyzer script (PRD-CCT-001); executed via relative path scripts/cct_analyze.py
+COPY scripts/cct_analyze.py /app/scripts/cct_analyze.py
 
 # Appdata directory for user-configurable engines & config
 RUN mkdir -p /appdata/engines \
