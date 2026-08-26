@@ -7,6 +7,8 @@
 #include "metrics.h"
 
 #include <atomic>
+#include <filesystem>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -357,7 +359,18 @@ void handle(int fd, ApiServer::Impl* p) {
             send_response(fd, 404, "{\"error\":\"sequence not found\"}");
             return;
         }
-        CctResult cct = CctAnalyzer::analyze(rec->source_path, algo);
+
+        // Post-conversion the original is moved into archive/<y>/<m>/, so
+        // source_path may no longer exist. Prefer it while present; otherwise
+        // analyze the converted DNG instead (libraw decodes DNG natively).
+        std::string target = rec->source_path;
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(target, ec))
+                target = rec->output_path;
+        }
+
+        CctResult cct = CctAnalyzer::analyze(target, algo);
         if (!cct.ok) {
             send_response(fd, 500, "{\"error\":\"raw decode failed\"}");
             return;
