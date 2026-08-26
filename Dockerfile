@@ -23,6 +23,7 @@ FROM debian:bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake g++-12 pkg-config make \
     libssl-dev libmariadb-dev nlohmann-json3-dev libspdlog-dev \
+    libraw-dev \
     ca-certificates exiftool libexif12 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -43,6 +44,7 @@ RUN mkdir -p build && cd build \
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 libmariadb3 libspdlog1.10 \
+    libraw20 \
     ca-certificates exiftool libexif12 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 10001 -m appuser

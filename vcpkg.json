@@ -1,12 +1,13 @@
 {
   "name": "rawimport-pipeline",
-  "version-string": "2.0.5",
+  "version-string": "2.3.0",
   "description": "RawImport RAW->DNG pipeline (Windows build dependencies)",
   "dependencies": [
     "openssl",
     "nlohmann-json",
     "spdlog",
     "libmariadb",
-    "zlib"
+    "zlib",
+    "libraw"
   ]
 }

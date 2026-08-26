@@ -30,6 +30,20 @@ find_library(MARIADB_LIB
   REQUIRED)
 find_path(MARIADB_INCLUDE NAMES mysql.h PATH_SUFFIXES mariadb mysql REQUIRED)
 
+# LibRaw — CCT analysis RAW decoding (PRD_CCT_Analysis_Native_Cpp_v2.3.0 §4).
+# Dual resolution:
+#   - vcpkg (Windows): lowercase CONFIG package, reentrant target libraw::raw_r
+#   - Debian bookworm: libraw-dev 0.20.x ships NO CMake config -> pkg-config
+set(RI_LIBRAW_TARGET "")
+find_package(libraw CONFIG QUIET)
+if(libraw_FOUND)
+  set(RI_LIBRAW_TARGET libraw::raw_r)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LIBRAW REQUIRED IMPORTED_TARGET libraw)
+  set(RI_LIBRAW_TARGET PkgConfig::LIBRAW)
+endif()
+
 add_executable(rawimport-pipeline
   src/main.cpp
   src/config.cpp
@@ -43,6 +57,7 @@ add_executable(rawimport-pipeline
   src/worker.cpp
   src/metrics.cpp
   src/exiftool_daemon.cpp
+  src/cct_analyzer.cpp  # CCT native analysis (PRD v2.3.0)
 )
 
 # cxxopts: header-only, vendored at src/vendor/cxxopts.hpp
@@ -54,6 +69,7 @@ target_link_libraries(rawimport-pipeline PRIVATE
   nlohmann_json::nlohmann_json
   spdlog::spdlog
   ${MARIADB_LIB}
+  ${RI_LIBRAW_TARGET}
 )
 
 if(MSVC)

@@ -1,6 +1,7 @@
 #include "api.h"
 #include "config.h"
 #include "db.h"
+#include "cct_analyzer.h"
 #include "rotation.h"
 #include "pipeline.h"
 #include "metrics.h"
@@ -335,6 +336,38 @@ void handle(int fd, ApiServer::Impl* p) {
         if (!r) { send_response(fd, 404, "{\"error\":\"not-found\"}"); return; }
         p->rotation_mgr->Queue(r->id, r->output_path, orient, client);
         send_response(fd, 200, "{\"status\":\"queued\"}");
+        return;
+    }
+
+    // ---- CCT analysis endpoint (PRD_CCT_Analysis_Native_Cpp_v2.3.0 §7) ----
+    if (method == "GET" && path == "/api/v1/cct/analyze") {
+        std::string seq = q.count("sequence") ? q["sequence"] : "";
+        std::string algo = q.count("method") && !q["method"].empty()
+                               ? q["method"] : "grayworld";
+        if (seq.empty()) {
+            send_response(fd, 400, "{\"error\":\"missing sequence\"}");
+            return;
+        }
+        if (algo != "grayworld" && algo != "whitepatch") {
+            send_response(fd, 400, "{\"error\":\"unsupported method\"}");
+            return;
+        }
+        auto rec = store.GetImportBySequence(seq);
+        if (!rec) {
+            send_response(fd, 404, "{\"error\":\"sequence not found\"}");
+            return;
+        }
+        CctResult cct = CctAnalyzer::analyze(rec->source_path, algo);
+        if (!cct.ok) {
+            send_response(fd, 500, "{\"error\":\"raw decode failed\"}");
+            return;
+        }
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(3);
+        os << "{\"gains\":[" << cct.gains[0] << "," << cct.gains[1] << ","
+           << cct.gains[2] << "],\"cct\":" << cct.cct
+           << ",\"tint\":" << cct.tint << "}";
+        send_response(fd, 200, os.str());
         return;
     }
 
