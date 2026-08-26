@@ -343,12 +343,12 @@ void handle(int fd, ApiServer::Impl* p) {
     if (method == "GET" && path == "/api/v1/cct/analyze") {
         std::string seq = q.count("sequence") ? q["sequence"] : "";
         std::string algo = q.count("method") && !q["method"].empty()
-                               ? q["method"] : "grayworld";
+                               ? q["method"] : "shadesofgrey";
         if (seq.empty()) {
             send_response(fd, 400, "{\"error\":\"missing sequence\"}");
             return;
         }
-        if (algo != "grayworld" && algo != "whitepatch") {
+        if (algo != "shadesofgrey" && algo != "whitepatch") {
             send_response(fd, 400, "{\"error\":\"unsupported method\"}");
             return;
         }

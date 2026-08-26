@@ -16,7 +16,7 @@ struct CctResult {
 
 class CctAnalyzer {
 public:
-    // Supported methods: "grayworld" | "whitepatch"
+    // Supported methods: "shadesofgrey" | "whitepatch"
     // Any other value returns ok=false.
     static CctResult analyze(const std::string& raw_path,
                              const std::string& method);

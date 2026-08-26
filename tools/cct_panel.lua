@@ -4,171 +4,176 @@
 --
 -- Install: copy into darktable's lua config dir and require from luarc:
 --   require "cct_panel"
---
--- Requires RAWIMPORT_API_URL / API_TOKEN env vars.
--- NOTE: dt.gui.action only works while the target image is open in the
--- darkroom view; Apply preflights this and prints guidance otherwise.
 
-local function api_base_url()
-    if RAWIMPORT_API_URL and RAWIMPORT_API_URL ~= "" then return RAWIMPORT_API_URL end
-    return os.getenv("RAWIMPORT_API_URL") or ""
-end
-
-local function api_token()
-    if API_TOKEN and API_TOKEN ~= "" then return API_TOKEN end
-    return os.getenv("API_TOKEN") or ""
-end
+-- §8.1: API URL from env, falling back to localhost default.
+local api_url = os.getenv("RAWIMPORT_API_URL") or "http://localhost:8080"
+local api_token = os.getenv("API_TOKEN") or ""
 
 local function curl_base_args()
-    local tok = api_token()
-    return (tok ~= "") and (' -H "Authorization: Bearer ' .. tok .. '"') or ""
+    return (api_token ~= "") and (' -H "Authorization: Bearer ' .. api_token .. '"') or ""
 end
 
-local function resolve_sequence(image)
-    local base = api_base_url()
-    if base ~= "" and image.path then
-        local sp = image.path .. "/" .. image.filename
-        local esc = sp:gsub("([^%w%-%._~/])", function(c)
-            return string.format("%%%02X", string.byte(c))
-        end)
-        local cmd = string.format('curl -s%s "%s/api/v1/imports/by-source?path=%s"',
-            curl_base_args(), base, esc)
-        local pipe = io.popen(cmd)
-        if pipe then
-            local out = pipe:read("*a")
-            pipe:close()
-            local seq = out:match('"sequence"%s*:%s*"([^"]+)"')
-            if seq then return seq end
-        end
+local METHODS = { "shadesofgrey", "whitepatch" }
+
+-- ---------------------------------------------------------------- widgets --
+local url_entry    = dt.new_widget("entry"){ text = api_url,
+    tooltip = "RawImport pipeline base URL", placeholder = "http://localhost:8080" }
+local seq_entry    = dt.new_widget("entry"){ text = "",
+    tooltip = "IMG_{n} sequence name" }
+local method_combo = dt.new_widget("combobox"){ label = "Method", value = 1,
+    table.unpack(METHODS) }
+local status_lbl   = dt.new_widget("label"){ label = "Status: ready", selectable = true }
+local cct_lbl      = dt.new_widget("label"){ label = "CCT: --", selectable = true }
+local tint_lbl     = dt.new_widget("label"){ label = "Tint: --", selectable = true }
+local gains_lbl    = dt.new_widget("label"){ label = "Gains: --", selectable = true }
+local apply_btn    = dt.new_widget("button"){ label = "Apply to Color Calibration",
+                                              sensitive = false }
+
+-- Populate the sequence entry from a sole lighttable selection.
+local function autofill_sequence()
+    if seq_entry.text ~= "" then return end
+    local images = dt.gui.selection()
+    if images and #images == 1 then
+        seq_entry.text = images[1].filename:gsub("%..*$", "")
     end
-    return image.filename:gsub("%..*$", "")
 end
 
--- Synchronous analysis: single GET, no polling (PRD v2.3.0 §8).
-local function fetch_cct(seq, method)
-    local base = api_base_url()
-    if base == "" then return nil, nil, nil, "RAWIMPORT_API_URL not set" end
-    local cmd = string.format(
-        'curl -s%s "%s/api/v1/cct/analyze?sequence=%s&method=%s"',
-        curl_base_args(), base, seq, method)
+-- -------------------------------------------------------------- analysis --
+-- Synchronous GET with HTTP-status capture (§8.4 error mapping).
+-- Returns: body(string), code(number) or nil, errmsg.
+local function http_get(path_and_query)
+    local url = string.format("%s%s", url_entry.text, path_and_query)
+    local cmd = string.format('curl -s -w "\\n%%{http_code}"%s "%s"',
+                              curl_base_args(), url)
     local pipe = io.popen(cmd)
-    if not pipe then return nil, nil, nil, "curl failed" end
+    if not pipe then
+        return nil, "Pipeline unreachable at " .. url_entry.text ..
+                    ". Check connection."
+    end
     local out = pipe:read("*a")
-    pipe:close()
-
-    local err = out:match('"error"%s*:%s*"([^"]+)"')
-    if err then return nil, nil, nil, err end
-
-    local cct  = tonumber(out:match('"cct"%s*:%s*([%d%.]+)'))
-    local tint = tonumber(out:match('"tint"%s*:%s*([%d%.%-]+)'))
-    -- gains:[r,g,b]
-    local g = out:match('"gains"%s*:%s*%[([^%]]*)%]')
-    local gr, gg, gb
-    if g then
-        gr = tonumber(g:match("([^,]+)"))
-        gg, gb = tonumber(g:match(",([^,]+),")), tonumber(g:match(",([^,]+)$"))
+    local ok, is_exit, exit_code = pipe:close()
+    if not ok and (not out or out == "") then
+        return nil, "Pipeline unreachable at " .. url_entry.text ..
+                    ". Check connection."
     end
-    if cct and gr then
-        return { cct = cct, tint = tint, r = gr, g = gg, b = gb }, nil
-    end
-    return nil, nil, nil, "unexpected response"
+    local body = out:match("^(.*)%s*(%d%d%d)%s*$")
+    if not body then return nil, "Malformed response from pipeline." end
+    local code = tonumber(out:match("(%d%d%d)%s*$"))
+    return body, nil, code
 end
 
-local METHODS = { "grayworld", "whitepatch" }
+local function analyze_clicked()
+    autofill_sequence()
+    local seq = seq_entry.text
+    if seq == "" then
+        status_lbl.label = "Status: enter a sequence name"
+        return
+    end
+    local method = METHODS[method_combo.selected]
+    status_lbl.label = "Status: analyzing " .. seq .. " ..."
+    cct_lbl.label, tint_lbl.label, gains_lbl.label = "CCT: --", "Tint: --", "Gains: --"
+    apply_btn.sensitive = false
 
-local cct_method_combo = dt.new_widget("combobox"){
-    label = "Method", value = 1,
-    table.unpack(METHODS),
-}
-local cct_status_lbl = dt.new_widget("label"){ label = "Status: ready", selectable = true }
-local cct_result_lbl = dt.new_widget("label"){ label = "Result: --", selectable = true }
+    local body, err, code = http_get(
+        string.format("/api/v1/cct/analyze?sequence=%s&method=%s", seq, method))
+    if err then
+        status_lbl.label = "Status: failed"
+        cct_lbl.label = "Error: " .. err
+        return
+    end
 
--- Preflight (D7): applying gains via dt.gui.action requires the target image
--- open in the darkroom view; otherwise it silently no-ops.
-local function darkroom_ready_for(image)
+    local jerr = body:match('"error"%s*:%s*"([^"]+)"')
+    if jerr then
+        status_lbl.label = "Status: failed (" .. tostring(code) .. ")"
+        if jerr == "sequence not found" then
+            cct_lbl.label = "Error: Sequence not found in pipeline database."
+        elseif jerr == "raw decode failed" then
+            cct_lbl.label = "Error: RAW decode failed. Check that source file exists."
+        else
+            cct_lbl.label = "Error: " .. jerr
+        end
+        return
+    end
+
+    local cct  = tonumber(body:match('"cct"%s*:%s*([%d%.]+)'))
+    local tint = tonumber(body:match('"tint"%s*:%s*([%d%.%-]+)'))
+    local g = body:match('"gains"%s*:%s*%[([^%]]*)%]')
+    local gr = tonumber(g and g:match("^%s*([^,%s]+)"))
+    local gg = tonumber(g and g:match(",%s*([^,%s]+)"))
+    local gb = tonumber(g and g:match(",%s*([^,%s]+)%s*$"))
+    if not cct or not gr then
+        status_lbl.label = "Status: malformed response"
+        return
+    end
+
+    cct_lbl.label   = string.format("CCT: %.0f K", cct)
+    tint_lbl.label  = string.format("Tint: %.2f", tint or 0)
+    gains_lbl.label = string.format("Gains: R×%.3f  G×%.3f  B×%.3f",
+                                    gr, gg or 1.0, gb or 1.0)
+    status_lbl.label = "Status: completed"
+    apply_btn.sensitive = true
+    -- stash for Apply
+    __cct_last = { r = gr, g = gg or 1.0, b = gb or 1.0, cct = cct }
+end
+
+local function apply_clicked()
+    autofill_sequence()
+    local images = dt.gui.selection()
+    if not __cct_last then
+        dt.print("CCT: run Analyze first")
+        return
+    end
+    local img = (images and #images == 1) and images[1] or nil
+    if not img and dt.gui.current_view() == dt.gui.views.darkroom then
+        img = dt.gui.get_darkroom_image()
+    end
+
+    -- §8.3 preflight: darkroom view active AND target image loaded.
     if dt.gui.current_view() ~= dt.gui.views.darkroom then
-        return false, "Switch to darkroom view to apply gains."
+        dt.print("Switch to darkroom view with the target image loaded to apply gains.")
+        status_lbl.label = "Status: switch to darkroom view to apply gains."
+        return
     end
     local dr = dt.gui.get_darkroom_image()
-    if not dr or dr.id ~= image.id then
-        return false, "This image is not the one open in the darkroom."
+    if not dr or (img and dr.id ~= img.id) then
+        dt.print("Switch to darkroom view with the target image loaded to apply gains.")
+        status_lbl.label = "Status: target image not loaded in darkroom."
+        return
     end
-    return true
+
+    -- PRD §8.3: push gains via the colorbalance RGB gain action.
+    pcall(function()
+        dt.gui.action("lib/colorbalance/rgb/gain", "set",
+                      string.format("%.4f,%.4f,%.4f",
+                                    __cct_last.r, __cct_last.g, __cct_last.b))
+    end)
+    dt.print(string.format("Applied CCT %.0fK gains (%.3f/%.3f/%.3f)",
+                           __cct_last.cct, __cct_last.r,
+                           __cct_last.g, __cct_last.b))
+    status_lbl.label = "Status: gains applied"
 end
 
-local analyze_btn = dt.new_widget("button"){
-    label = "Analyze white balance",
-    clicked_callback = function()
-        local images = dt.gui.selection()
-        if not images or #images == 0 then
-            dt.print("CCT: no images selected")
-            return
-        end
-        local img = images[1]
-        local seq = resolve_sequence(img)
-        local method = METHODS[cct_method_combo.selected]
-        cct_status_lbl.label = "Status: analyzing " .. seq .. " (" .. method .. ")..."
-        local res, err = fetch_cct(seq, method)
-        if not res then
-            cct_status_lbl.label = "Status: failed - " .. tostring(err)
-            return
-        end
-        cct_status_lbl.label = string.format(
-            "Status: done (%.0fK)", res.cct)
-        cct_result_lbl.label = string.format(
-            "Result: %.0fK | tint %.2f | gains [%.3f, %.3f, %.3f]",
-            res.cct, res.tint, res.r, res.g, res.b)
-    end,
-}
-
-local apply_btn = dt.new_widget("button"){
-    label = "Apply to Color Calibration",
-    clicked_callback = function()
-        local images = dt.gui.selection()
-        if not images or #images == 0 then return end
-        local img = images[1]
-
-        local seq = resolve_sequence(img)
-        local method = METHODS[cct_method_combo.selected]
-        local res, err = fetch_cct(seq, method)
-        if not res then
-            cct_result_lbl.label = "Result: failed - " .. tostring(err)
-            return
-        end
-
-        local ok, why = darkroom_ready_for(img)
-        if not ok then
-            cct_result_lbl.label = "Result: " .. why
-            dt.print("CCT: " .. why)
-            return
-        end
-
-        -- Apply per-channel gains through the RGB channel mixer.
-        pcall(function()
-            dt.gui.action("iop/channelmixerrgb/red",   0, "", "set:" .. tostring(res.r), 1.0)
-            dt.gui.action("iop/channelmixerrgb/green", 0, "", "set:" .. tostring(res.g), 1.0)
-            dt.gui.action("iop/channelmixerrgb/blue",  0, "", "set:" .. tostring(res.b), 1.0)
-        end)
-        dt.print(string.format("Applied CCT %.0fK (gains %.3f/%.3f/%.3f)",
-                               res.cct, res.r, res.g, res.b))
-        cct_result_lbl.label = string.format(
-            "Result: applied %.0fK", res.cct)
-    end,
-}
-
+-- ---------------------------------------------------------------- panel --
 local cct_panel = dt.new_widget("box"){
     orientation = "vertical",
     dt.new_widget("label"){ label = "CCT Analysis", selectable = true },
     dt.new_widget("label"){ label = "Native white-balance estimation", selectable = true },
     dt.new_widget("label"){ label = " " },
+    dt.new_widget("label"){ label = "API URL:", selectable = true },
+    url_entry,
+    dt.new_widget("label"){ label = " " },
+    dt.new_widget("label"){ label = "Sequence:", selectable = true },
+    seq_entry,
     dt.new_widget("label"){ label = "Method:", selectable = true },
-    cct_method_combo,
+    method_combo,
     dt.new_widget("label"){ label = " " },
     analyze_btn,
-    cct_status_lbl,
+    cct_lbl,
+    tint_lbl,
+    gains_lbl,
     dt.new_widget("label"){ label = " " },
     apply_btn,
-    cct_result_lbl,
+    status_lbl,
 }
 
 pcall(function()

@@ -1,7 +1,7 @@
 // cct_analyzer.cpp — synchronous native CCT analysis (PRD v2.3.0 §6).
 //
 // Pipeline: libraw decode (camera-native linear 16-bit RGB, no WB applied)
-//   → illuminant estimate (grayworld mean | whitepatch 99th percentile)
+//   → illuminant estimate (shadesofgrey Minkowski p=6 | whitepatch 99th pct)
 //   → green-normalized gains
 //   → sRGB-matrix XYZ → xy chromaticity (scale-invariant)
 //   → CCT/tint via Robertson-method isothermal search on the analytical
@@ -72,12 +72,22 @@ std::vector<Rgb> decode_linear_rgb(const std::string& path, int& w, int& h) {
     return out;  // LibRaw cleans up on destruction
 }
 
-// Gray-world: per-channel arithmetic mean (Minkowski p=1).
-Rgb grayworld(const std::vector<Rgb>& px) {
+// Shades-of-Grey: per-channel Minkowski norm p=6 (Finlayson & Trezzi 2004).
+// Samples are scaled to [0, 1] before the norm; the result is scale-invariant
+// downstream (chromaticity only depends on channel ratios).
+constexpr double kSogP = 6.0;
+Rgb shadesofgrey(const std::vector<Rgb>& px) {
     Rgb acc;
-    for (const auto& p : px) { acc.r += p.r; acc.g += p.g; acc.b += p.b; }
+    for (const auto& p : px) {
+        acc.r += std::pow(p.r / 65535.0 + kEps, kSogP);
+        acc.g += std::pow(p.g / 65535.0 + kEps, kSogP);
+        acc.b += std::pow(p.b / 65535.0 + kEps, kSogP);
+    }
     const double n = static_cast<double>(px.size());
-    return {acc.r / n, acc.g / n, acc.b / n};
+    const double inv = 1.0 / kSogP;
+    return {std::pow(acc.r / n, inv),
+            std::pow(acc.g / n, inv),
+            std::pow(acc.b / n, inv)};
 }
 
 // White-patch: per-channel 99th percentile via exact 16-bit histogram.
@@ -108,8 +118,8 @@ Rgb whitepatch(const std::vector<Rgb>& px) {
 }
 
 Rgb estimate_illuminant(const std::vector<Rgb>& px, const std::string& method) {
-    if (method == "grayworld")  return grayworld(px);
-    if (method == "whitepatch") return whitepatch(px);
+    if (method == "shadesofgrey") return shadesofgrey(px);
+    if (method == "whitepatch")   return whitepatch(px);
     throw std::runtime_error("unsupported method: " + method);
 }
 
@@ -146,7 +156,7 @@ Xy locus_xy(double t) {
 CctResult CctAnalyzer::analyze(const std::string& raw_path,
                                const std::string& method) {
     CctResult result;
-    if (method != "grayworld" && method != "whitepatch") {
+    if (method != "shadesofgrey" && method != "whitepatch") {
         result.ok = false;
         return result;
     }
