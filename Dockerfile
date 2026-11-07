@@ -1,6 +1,5 @@
-# Multi-stage build for the RawImport Pipeline C++20 rewrite.
+# Multi-stage build for the RawImport Pipeline C++20 rewrite (hexagonal architecture).
 # Toolchain image: cmake + g++-12 + libs. Runtime: debian:bookworm-slim.
-# Non-destructive: this is Dockerfile.cpp, separate from the Go Dockerfile.
 # See PRD_RawImport_Pipeline_CppRewrite.md §10 and ORCHESTRATION_CppRewrite.md §2.4.
 
 # ============================================================
@@ -22,7 +21,7 @@ RUN cargo build --release --bin dnglab
 FROM debian:bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake g++-12 pkg-config make \
-    libssl-dev libmariadb-dev nlohmann-json3-dev libspdlog-dev \
+    libssl-dev libmariadb-dev libpq-dev nlohmann-json3-dev libspdlog-dev \
     ca-certificates exiftool libexif12 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -34,7 +33,8 @@ COPY migrations ./migrations
 COPY --from=dnglab-build /vibelabdng/target/release/dnglab /usr/local/bin/dnglab
 
 RUN mkdir -p build && cd build \
-    && cmake -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_BUILD_TYPE=Release .. \
+    && cmake -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_BUILD_TYPE=Release \
+        -DWITH_DNGLAB=ON -DWITH_MARIADB=ON -DBUILD_TESTING=ON .. \
     && cmake --build . -j"$(nproc)"
 
 # ============================================================
@@ -42,13 +42,13 @@ RUN mkdir -p build && cd build \
 # ============================================================
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl3 libmariadb3 libspdlog1.10 \
+    libssl3t64 libmariadb3 libpq5 libspdlog1.15 \
     ca-certificates exiftool libexif12 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 10001 -m appuser
 
 WORKDIR /app
-COPY --from=build /src/build/rawimport-pipeline /usr/local/bin/
+COPY --from=build /src/build/rawimport-cli /usr/local/bin/
 COPY --from=build /usr/local/bin/dnglab /usr/local/bin/dnglab
 COPY migrations /db/migrations/
 
@@ -71,4 +71,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 USER appuser
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/rawimport-pipeline"]
+ENTRYPOINT ["/usr/local/bin/rawimport-cli"]
