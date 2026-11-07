@@ -113,9 +113,8 @@ Install `tools/betterembeds.lua` as a Darktable Lua script, set `RAWIMPORT_API_U
 ## Build (C++)
 
 ```bash
-mkdir build && cd build && cmake .. && make -j$(nproc)
+mkdir build && cd build && cmake .. -DWITH_DNGLAB=ON -DBUILD_TESTING=ON && make -j$(nproc) && ctest
 ```
-
 ## License
 
 MIT. See `LICENSE`, `NOTICE`.

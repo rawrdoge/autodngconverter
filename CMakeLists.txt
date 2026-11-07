@@ -15,12 +15,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # ============================================================================
-# Optional: Hexagonal Architecture Layer (domain/ports/adapters + CLI)
+# Hexagonal Architecture Layer (domain/ports/adapters + CLI)
 # ============================================================================
-option(WITH_HEXAGONAL "Build hexagonal-architecture layer" OFF)
 option(BUILD_TESTING "Build unit tests" OFF)
 
-if(WITH_HEXAGONAL OR BUILD_TESTING)
+if(DEFINED WITH_HEXAGONAL OR BUILD_TESTING)
   # Domain types library — header-only, zero external deps.
   add_library(domain_types INTERFACE)
   target_include_directories(domain_types INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -159,68 +158,6 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   target_include_directories(rawimport-cli PRIVATE include src)
   target_link_libraries(rawimport-cli PRIVATE infrastructure domain)
 endif()
-
-# ============================================================================
-# Legacy Monolith Build (original pipeline — always built)
-# ============================================================================
-# Dependencies per ORCHESTRATION_CppRewrite.md §2 / PRD §6.2.
-# Package names follow Debian bookworm / vcpkg conventions.
-find_package(OpenSSL REQUIRED)
-find_package(nlohmann_json REQUIRED)
-find_package(spdlog REQUIRED)
-
-# MariaDB C connector — libmariadb-dev provides libmariadb.so directly;
-# the C API header (mysql.h) lives under an include subdir on Debian,
-# so locate it explicitly.
-find_library(MARIADB_LIB
-  NAMES mariadb libmariadb mariadbclient
-  PATH_SUFFIXES mariadb mysql
-  REQUIRED)
-find_path(MARIADB_INCLUDE NAMES mysql.h PATH_SUFFIXES mariadb mysql REQUIRED)
-
-add_executable(rawimport-pipeline
-  src/main.cpp
-  src/config.cpp
-  src/util.cpp
-  src/db.cpp
-  src/pipeline.cpp
-  src/converter.cpp
-  src/rotation.cpp
-  src/reconcile.cpp
-  src/api.cpp
-  src/worker.cpp
-  src/metrics.cpp
-  src/exiftool_daemon.cpp
-)
-
-target_include_directories(rawimport-pipeline PRIVATE
-  src
-  ${MARIADB_INCLUDE}
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/vendor
-)
-
-target_link_libraries(rawimport-pipeline PRIVATE
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  nlohmann_json::nlohmann_json
-  spdlog::spdlog
-  ${MARIADB_LIB}
-)
-
-if(MSVC)
-  find_package(ZLIB REQUIRED)
-  target_link_libraries(rawimport-pipeline PRIVATE
-    secur32 ws2_32 crypt32 bcrypt advapi32 Shlwapi ZLIB::ZLIB)
-endif()
-
-if(MSVC)
-  target_compile_options(rawimport-pipeline PRIVATE /W4)
-else()
-  target_compile_options(rawimport-pipeline PRIVATE -Wall -Wextra)
-endif()
-
-install(TARGETS rawimport-pipeline DESTINATION /usr/local/bin)
-install(DIRECTORY migrations DESTINATION /app)
 
 # ============================================================================
 # Tests
