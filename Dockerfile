@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 COPY CMakeLists.txt ./
+COPY include ./include
 COPY src ./src
+COPY tests ./tests
 COPY migrations ./migrations
 # Copy dnglab binary from Stage 0
 COPY --from=dnglab-build /vibelabdng/target/release/dnglab /usr/local/bin/dnglab
