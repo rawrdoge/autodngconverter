@@ -42,7 +42,7 @@ RUN mkdir -p build && cd build \
 # ============================================================
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl3t64 libmariadb3 libpq5 libspdlog1.15 \
+    libssl3 libmariadb3 libpq5 libspdlog1.10 \
     ca-certificates exiftool libexif12 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 10001 -m appuser
