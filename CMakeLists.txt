@@ -169,25 +169,25 @@ if(BUILD_TESTING)
   # Domain types test — zero external deps.
   add_executable(domain_types_test tests/domain/types_test.cpp)
   set_target_properties(domain_types_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(domain_types_test PRIVATE include src)
+  target_include_directories(domain_types_test PRIVATE include src tests)
   add_test(NAME domain_types_tests COMMAND domain_types_test)
 
   # Port interface test — verifies all port headers compile.
   add_executable(port_interface_test tests/domain/ports_test.cpp)
   set_target_properties(port_interface_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(port_interface_test PRIVATE include)
+  target_include_directories(port_interface_test PRIVATE include tests)
   add_test(NAME port_interface_tests COMMAND port_interface_test)
 
   # Infrastructure smoke test.
   add_executable(infra_test tests/infrastructure/infra_test.cpp)
   set_target_properties(infra_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(infra_test PRIVATE include src)
+  target_include_directories(infra_test PRIVATE include src tests)
   add_test(NAME infra_tests COMMAND infra_test)
 
   # Converter factory tests.
   add_executable(converter_factory_test tests/infrastructure/converter_factory_test.cpp)
   set_target_properties(converter_factory_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(converter_factory_test PRIVATE include src)
+  target_include_directories(converter_factory_test PRIVATE include src tests)
   if(WITH_DNGLAB OR WITH_ADOBE_DNG)
     target_link_libraries(converter_factory_test PRIVATE infrastructure)
   endif()
@@ -196,7 +196,7 @@ if(BUILD_TESTING)
   # Migration tests (need both DB drivers).
   add_executable(migration_test tests/migration/migration_test.cpp)
   set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(migration_test PRIVATE include src)
+  target_include_directories(migration_test PRIVATE include src tests)
   if(WITH_MARIADB AND WITH_POSTGRESQL)
     target_link_libraries(migration_test PRIVATE infrastructure)
   endif()

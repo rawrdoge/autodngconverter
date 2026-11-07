@@ -6,12 +6,14 @@
 
 #include <cstdint>
 #include <string>
+#include <sstream>
 #include <vector>
 #include <optional>
 #include <chrono>
 #include <array>
 #include <map>
 #include <span>
+#include <iomanip>
 
 namespace rawimport::domain {
 
