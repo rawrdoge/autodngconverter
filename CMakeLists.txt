@@ -17,9 +17,10 @@ endif()
 # ============================================================================
 # Hexagonal Architecture Layer (domain/ports/adapters + CLI)
 # ============================================================================
+option(WITH_HEXAGONAL "Build hexagonal architecture layer" ON)
 option(BUILD_TESTING "Build unit tests" OFF)
 
-if(DEFINED WITH_HEXAGONAL OR BUILD_TESTING)
+if(WITH_HEXAGONAL OR BUILD_TESTING)
   # Domain types library — header-only, zero external deps.
   add_library(domain_types INTERFACE)
   target_include_directories(domain_types INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
