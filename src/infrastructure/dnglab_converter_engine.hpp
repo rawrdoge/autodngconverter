@@ -19,14 +19,14 @@ public:
     DnglabConverterEngine();
     ~DnglabConverterEngine() override;
 
-    HealthReport                    health_check() override;
-    std::vector<std::string>        supported_extensions() override;
-    bool                            supports_linear_dng() override;
-    bool                            supports_lossy_compression() override;
-    int                             max_parallel_workers() override;
-    std::optional<domain::FilePath> convert(const domain::FilePath& source,
-                                             const domain::FilePath& dest,
-                                             const domain::ConversionSettings& settings) override;
+    domain::HealthReport              health_check() override;
+    std::vector<std::string>          supported_extensions() override;
+    bool                              supports_linear_dng() override;
+    bool                              supports_lossy_compression() override;
+    int                               max_parallel_workers() override;
+    std::optional<domain::FilePath>   convert(const domain::FilePath& source,
+                                               const domain::FilePath& dest,
+                                               const domain::ConversionSettings& settings) override;
 
 private:
     int max_workers_;

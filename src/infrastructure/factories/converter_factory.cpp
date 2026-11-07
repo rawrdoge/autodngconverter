@@ -109,7 +109,7 @@ std::unique_ptr<domain::ConverterEngine> MakeConverterEngine(
         }
 
         // Degraded or Unhealthy: warn and try fallback
-        log_warn(log, "dnglab health check " +
+        log_warn(log, std::string("dnglab health check ") +
                       (health.status == domain::HealthStatus::Degraded ? "degraded" : "failed") +
                       ": " + health.message);
 
