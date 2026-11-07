@@ -1,6 +1,6 @@
 # autodngconverter
 
-Containerized RAW→DNG pipeline. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in MariaDB. Darktable Lua plugin re-embeds edited previews and syncs hashes.
+v2.3.0 — Containerized RAW→DNG pipeline with modular hexagonal architecture alongside the existing monolith. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in MariaDB. Darktable Lua plugin re-embeds edited previews and syncs hashes.
 
 Personal tool, not a hardened product. Use at your own risk.
 
@@ -66,6 +66,46 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 Binary resolution order: `CONVERTER_ENGINE_BIN` → `{APPDATA_DIR}/engines/{engine}` → `/usr/local/bin/{engine}` → `PATH`. Built-in dnglab: `/usr/local/bin/dnglab`.
 
 Custom engine: enable the appdata volume in compose, place the binary at `{appdata}/engines/{engine_name}` (`chmod +x`), set `CONVERTER_ENGINE` accordingly.
+
+## Architecture
+
+Two coexisting builds are supported:
+
+| Build | Target | Description |
+|-------|--------|-------------|
+| **Monolith** (default) | `rawimport-pipeline` | Original single-binary service; required deps: OpenSSL, nlohmann_json, spdlog, MariaDB C connector |
+| **Hexagonal** (`WITH_HEXAGONAL=ON`) | `rawimport-cli` | Modular domain/ports/adapters layer enabling database-engine swapping, graceful degradation, and unit testing without external deps |
+
+### Hexagonal Layer (`WITH_HEXAGONAL=ON`)
+
+Domain types have zero external dependencies. Infrastructure adapters are feature-flagged and degrade to no-ops when unavailable:
+
+| Flag | Adapter | Required Library |
+|------|---------|------------------|
+| `WITH_MARIADB` | MariaDB ImportStore | libmariadb-dev |
+| `WITH_POSTGRESQL` | PostgreSQL ImportStore | libpq-dev |
+| `WITH_DNGLAB` | dnglab ConverterEngine | binary only |
+| `WITH_ADOBE_DNG` | Adobe DNG ConverterEngine | binary only |
+| `WITH_EXIFTOOL` | ExifTool ExifExtractor (CLI + daemon) | exiftool |
+| `WITH_IMMICH` | Immich RotationSink | libcurl |
+| `WITH_SPDLOG` | Structured LogSink | libspdlog-dev |
+| `HAVE_OPENSSL` | OpenSSLHashService | libssl-dev |
+
+Build:
+```bash
+mkdir build_hex && cd build_hex
+cmake .. -DWITH_HEXAGONAL=ON -DWITH_DNGLAB=ON -DBUILD_TESTING=ON
+make -j$(nproc) && ctest
+```
+
+### Migration CLI
+
+Move from MariaDB to PostgreSQL while preserving exact `IMG_N` sequence IDs:
+```bash
+RAWIMPORT_DB_DRIVER=mariadb rawimport migrate --guide
+```
+
+See the design doc at `.github/ENGINE_DB_MIGRATION_DESIGN.md` for the full migration flow and failure-handling contract.
 
 ## API
 
