@@ -36,7 +36,7 @@ COPY --from=dnglab-build /vibelabdng/target/release/dnglab /usr/local/bin/dnglab
 
 RUN mkdir -p build && cd build \
     && cmake -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_BUILD_TYPE=Release \
-        -DWITH_DNGLAB=ON -DWITH_MARIADB=ON -DBUILD_TESTING=ON .. \
+        -DWITH_DNGLAB=ON -DBUILD_TESTING=ON .. \
     && cmake --build . -j"$(nproc)"
 
 # ============================================================
