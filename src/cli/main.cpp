@@ -71,7 +71,7 @@ public:
     void LogDbDeadlock(std::string_view) override {}
     void LogDbQueryFailed(std::string_view, std::string_view) override {}
 };
-std::unique_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) { return std::make_unique<NoopLogSink>(); }
+std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) { return std::make_shared<NoopLogSink>(); }
 } // namespace rawimport::infrastructure
 #endif
 

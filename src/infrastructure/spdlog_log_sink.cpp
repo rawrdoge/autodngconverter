@@ -504,8 +504,8 @@ void SpdlogLogSink::LogDbQueryFailed(std::string_view sequence_id,
     impl_->LogDbQueryFailed(sequence_id, error);
 }
 
-std::unique_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
-    return std::make_unique<SpdlogLogSink>(std::move(logger_name));
+std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
+    return std::make_shared<SpdlogLogSink>(std::move(logger_name));
 }
 
 } // namespace rawimport::infrastructure

@@ -89,7 +89,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Factory that returns a domain::LogSink* wrapper (caller takes no ownership).
-std::unique_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name = "rawimport");
+// Factory that returns a domain::LogSink shared pointer.
+std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name = "rawimport");
 
 } // namespace rawimport::infrastructure
