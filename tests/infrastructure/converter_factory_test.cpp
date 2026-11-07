@@ -18,7 +18,8 @@ using namespace rawimport::domain;
 
 class MockConfigProvider final : public ConfigProvider {
 public:
-    explicit MockConfigProvider(std::map<std::string, std::string> values) : values_(std::move(values)) {}
+    explicit MockConfigProvider(std::initializer_list<std::pair<const std::string, std::string>> values)
+        : values_(values) {}
 
     std::optional<std::string> get_string(const std::string& key) override {
         auto it = values_.find(key);
