@@ -145,7 +145,7 @@ jobs:
             & "$env:RI_VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           }
 
-      - name: Build rawimport-pipeline.exe
+      - name: Build rawimport-cli.exe (Windows)
         shell: cmd
         env:
           # Step-level env beats what msvc-dev-cmd imported from the runner's
