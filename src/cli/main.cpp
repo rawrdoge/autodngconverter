@@ -145,7 +145,7 @@ int run_application(int argc, char** argv) {
     StdFileSystem fs(hash_svc);
 
     // ─── Import Store (selected by DB_DRIVER) ──────────────────────────────────
-    std::string db_driver = config->get_string("DB_DRIVER").value_or("mariadb");
+    std::string db_driver = config->get_string("DB_DRIVER").value_or("postgresql");
     std::string db_connection = config->get_string("DB_CONNECTION").value_or("");
     std::string database_url = config->get_string("DATABASE_URL").value_or("");
     std::string conn_str = !db_connection.empty() ? db_connection : database_url;
