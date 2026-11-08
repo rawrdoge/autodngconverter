@@ -1,8 +1,6 @@
 # autodngconverter
 
-Containerized RAW→DNG pipeline. Vibecoded with ❤️ from start to finish. 🧬 Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in PostgreSQL. Darktable Lua plugin re-embeds edited previews and syncs hashes.
-
-Personal tool, not a hardened product. Use at your own risk.
+Containerized RAW→DNG pipeline. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in PostgreSQL. Darktable Lua plugin re-embeds edited previews and syncs hashes.
 
 ## Quick Start
 
