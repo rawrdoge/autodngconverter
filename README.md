@@ -1,22 +1,20 @@
 # autodngconverter
 
-Containerized RAW→DNG pipeline. Vibecoded with ❤️ from start to finish. 🧬 Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in MariaDB. Darktable Lua plugin re-embeds edited previews and syncs hashes.
+Containerized RAW→DNG pipeline. Vibecoded with ❤️ from start to finish. 🧬 Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in PostgreSQL. Darktable Lua plugin re-embeds edited previews and syncs hashes.
 
 Personal tool, not a hardened product. Use at your own risk.
 
 ## Quick Start
 
-**1. Provision MariaDB 10.11+** (external; schema is migrated automatically on startup):
+**1. Provision PostgreSQL 15+** (external; schema is migrated automatically on startup):
 
 ```sql
-CREATE DATABASE rawimport CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'rawimport'@'%' IDENTIFIED BY 'your-password';
-GRANT CREATE, ALTER, DROP, INDEX, INSERT, UPDATE, DELETE, SELECT, REFERENCES
-  ON rawimport.* TO 'rawimport'@'%';
-FLUSH PRIVILEGES;
+CREATE DATABASE rawimport;
+CREATE USER rawimport WITH PASSWORD 'your-password';
+GRANT ALL PRIVILEGES ON DATABASE rawimport TO rawimport;
 ```
 
-**2. Configure** — `cp .env.example .env`, set the DB fields from step 1 (`DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`).
+**2. Configure** — `cp .env.example .env`, set the database DSN (`RAWIMPORT_DB_DRIVER=postgresql`, `RAWIMPORT_DB_CONNECTION=postgresql://rawimport:your-password@localhost:5432/rawimport`).
 
 **3. Map volumes** in `docker-compose.yml` to your NAS paths:
 
@@ -41,8 +39,8 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DB_DRIVER` | `mariadb` | Database backend |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | — | MariaDB connection (**password required**) |
+| `DB_DRIVER` | `postgresql` | Database backend (`postgresql`, `mariadb`) |
+| `DB_CONNECTION` / `DATABASE_URL` | — | Database connection string DSN |
 | `DB_SSLMODE` | `disable` | TLS mode |
 | `WATCH_DIR` / `OUTPUT_DIR` / `ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
 | `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
