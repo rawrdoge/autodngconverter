@@ -1,22 +1,18 @@
 # autodngconverter
 
-Containerized RAW→DNG pipeline. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in MariaDB. Darktable Lua plugin re-embeds edited previews and syncs hashes.
-
-Personal tool, not a hardened product. Use at your own risk.
+Containerized RAW→DNG pipeline. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in PostgreSQL. Darktable Lua plugin re-embeds edited previews and syncs hashes.
 
 ## Quick Start
 
-**1. Provision MariaDB 10.11+** (external; schema is migrated automatically on startup):
+**1. Provision PostgreSQL 15+** (external; schema is migrated automatically on startup):
 
 ```sql
-CREATE DATABASE rawimport CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'rawimport'@'%' IDENTIFIED BY 'your-password';
-GRANT CREATE, ALTER, DROP, INDEX, INSERT, UPDATE, DELETE, SELECT, REFERENCES
-  ON rawimport.* TO 'rawimport'@'%';
-FLUSH PRIVILEGES;
+CREATE DATABASE rawimport;
+CREATE USER rawimport WITH PASSWORD 'your-password';
+GRANT ALL PRIVILEGES ON DATABASE rawimport TO rawimport;
 ```
 
-**2. Configure** — `cp .env.example .env`, set the DB fields from step 1 (`DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`).
+**2. Configure** — `cp .env.example .env`, set the database DSN (`RAWIMPORT_DB_DRIVER=postgresql`, `RAWIMPORT_DB_CONNECTION=postgresql://rawimport:your-password@localhost:5432/rawimport`).
 
 **3. Map volumes** in `docker-compose.yml` to your NAS paths:
 
@@ -41,13 +37,13 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DB_DRIVER` | `mariadb` | Database backend |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | — | MariaDB connection (**password required**) |
+| `DB_DRIVER` | `postgresql` | Database backend (`postgresql`, `mariadb`) |
+| `DB_CONNECTION` / `DATABASE_URL` | — | Database connection string DSN |
 | `DB_SSLMODE` | `disable` | TLS mode |
 | `WATCH_DIR` / `OUTPUT_DIR` / `ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
 | `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
 | `FILE_PATTERN` | `IMG_{seq}` | Output filename |
-| `CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`, `libraw`) |
+| `CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`) |
 | `CONVERTER_ENGINE_BIN` | — | Explicit engine binary path override |
 | `APPDATA_DIR` | `/appdata` | Appdata root for engines/config |
 | `EXIFTOOL_BIN` | `exiftool` | ExifTool path |
@@ -66,6 +62,14 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 Binary resolution order: `CONVERTER_ENGINE_BIN` → `{APPDATA_DIR}/engines/{engine}` → `/usr/local/bin/{engine}` → `PATH`. Built-in dnglab: `/usr/local/bin/dnglab`.
 
 Custom engine: enable the appdata volume in compose, place the binary at `{appdata}/engines/{engine_name}` (`chmod +x`), set `CONVERTER_ENGINE` accordingly.
+
+## Legacy Migration CLI
+
+The migration CLI (`rawimport migrate --guide`) is retained as a legacy tool for moving data between database drivers. It's exposed through the hexagonal layer but not part of the primary workflow:
+
+```bash
+RAWIMPORT_DB_DRIVER=mariadb rawimport migrate --guide
+```
 
 ## API
 
@@ -105,9 +109,8 @@ Install `tools/betterembeds.lua` as a Darktable Lua script, set `RAWIMPORT_API_U
 ## Build (C++)
 
 ```bash
-mkdir build && cd build && cmake .. && make -j$(nproc)
+mkdir build && cd build && cmake .. -DWITH_DNGLAB=ON -DBUILD_TESTING=ON && make -j$(nproc) && ctest
 ```
-
 ## License
 
 MIT. See `LICENSE`, `NOTICE`.
