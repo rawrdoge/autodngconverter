@@ -1,1 +1,0 @@
-/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/domain_types_test.dir/link.d CMakeFiles/domain_types_test.dir/tests/domain/types_test.cpp.o -o domain_types_test

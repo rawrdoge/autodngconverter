@@ -1,1 +1,0 @@
-/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/port_interface_test.dir/link.d CMakeFiles/port_interface_test.dir/tests/domain/ports_test.cpp.o -o port_interface_test
