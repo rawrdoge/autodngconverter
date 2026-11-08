@@ -1,3 +1,4 @@
 [submodule "vibelabdng"]
 	path = vibelabdng
 	url = https://github.com/rawrdoge/vibelabdng.git
+	branch = minify
