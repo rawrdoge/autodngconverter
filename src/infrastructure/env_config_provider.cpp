@@ -12,7 +12,12 @@ namespace rawimport::infrastructure {
 EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
 
 std::string EnvConfigProvider::resolve_key(const std::string& key) const {
-    return prefix_ + key;
+    // First check for prefixed key (new format)
+    std::string prefixed = prefix_ + key;
+    if (std::getenv(prefixed.c_str())) return prefixed;
+    // Fall back to unprefixed key (legacy format, e.g., OUTPUT_DIR, WATCH_DIR)
+    if (std::getenv(key.c_str())) return key;
+    return prefixed; // return prefixed for consistent error messages
 }
 
 std::optional<std::string> EnvConfigProvider::get_string(const std::string& key) {

@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/rawimport-cli.dir/link.d "CMakeFiles/rawimport-cli.dir/src/cli/main.cpp.o" -o rawimport-cli  libinfrastructure.a libdomain.a libinfrastructure.a

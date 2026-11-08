@@ -1,0 +1,10 @@
+/workspace/autodngconverter/build_test/CMakeFiles/infrastructure.dir
+/workspace/autodngconverter/build_test/CMakeFiles/domain.dir
+/workspace/autodngconverter/build_test/CMakeFiles/rawimport-cli.dir
+/workspace/autodngconverter/build_test/CMakeFiles/domain_types_test.dir
+/workspace/autodngconverter/build_test/CMakeFiles/port_interface_test.dir
+/workspace/autodngconverter/build_test/CMakeFiles/infra_test.dir
+/workspace/autodngconverter/build_test/CMakeFiles/converter_factory_test.dir
+/workspace/autodngconverter/build_test/CMakeFiles/test.dir
+/workspace/autodngconverter/build_test/CMakeFiles/edit_cache.dir
+/workspace/autodngconverter/build_test/CMakeFiles/rebuild_cache.dir

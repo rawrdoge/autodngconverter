@@ -10,6 +10,8 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <unistd.h>
+#include <sys/wait.h>
 
 namespace rawimport::infrastructure {
 
@@ -27,14 +29,33 @@ std::string find_in_path(const std::string& name) {
     return {};
 }
 
-// Cross-platform process spawn returning exit code.
-int run_cmd(const std::vector<std::string>& args) {
-    std::ostringstream cmd;
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        if (i) cmd << " ";
-        cmd << args[i];
+int exec_cmd(const std::vector<std::string>& args) {
+    if (args.empty()) return -1;
+    
+    // Build argv array for execvp
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
     }
-    return std::system(cmd.str().c_str());
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == -1) return -1;
+
+    if (pid == 0) {
+        // Child process
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    // Parent process
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return -1;
 }
 
 } // anon
@@ -56,7 +77,7 @@ domain::HealthReport AdobeDngConverterEngine::health_check() {
     if (bin.empty())
         return {domain::HealthStatus::Unhealthy, "Adobe DNG Converter binary not found", domain::now()};
     // Quick version check.
-    const int rc = run_cmd({bin, "--help"});
+    const int rc = exec_cmd({bin, "--help"});
     (void)rc;
     return {domain::HealthStatus::Healthy, "Adobe DNG Converter available", domain::now()};
 }
@@ -82,7 +103,7 @@ std::optional<domain::FilePath> AdobeDngConverterEngine::convert(const domain::F
     args.push_back(dest.native.substr(0, dest.native.find_last_of("/\\")) );
     if (settings.lossy) args.push_back("-lossy");
     // Adobe DNG Converter runs serially — one invocation per file.
-    const int rc = run_cmd(args);
+    const int rc = exec_cmd(args);
     if (rc != 0) return std::nullopt;
     return dest;
 }

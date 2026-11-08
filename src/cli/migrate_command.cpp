@@ -2,8 +2,7 @@
  * rawimport-pipeline - CLI migrate command implementation
  * rawimport migrate --from mariadb --to postgresql --source-dsn ... --target-dsn ...
  */
-#ifdef WITH_MARIADB
-#ifdef WITH_POSTGRESQL
+#ifdef HAVE_MIGRATION
 
 #include <cstring>
 #include <iostream>
@@ -203,5 +202,4 @@ migration::MigrationResult run_guided_mode() {
 
 } // namespace rawimport::cli
 
-#endif // WITH_POSTGRESQL
-#endif // WITH_MARIADB
+#endif // HAVE_MIGRATION

@@ -23,7 +23,7 @@ DnglabConverterEngine::DnglabConverterEngine() : max_workers_(8) {}
 DnglabConverterEngine::~DnglabConverterEngine() = default;
 
 domain::HealthReport DnglabConverterEngine::health_check() {
-#ifdef DNGLAB_AVAILABLE
+#ifdef WITH_DNGLAB
     return {domain::HealthStatus::Healthy, "dnglab library available", domain::now()};
 #else
     // Check for binary in PATH as fallback.
@@ -44,7 +44,7 @@ int  DnglabConverterEngine::max_parallel_workers() { return max_workers_; }
 std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::FilePath& source,
                                                                 const domain::FilePath& dest,
                                                                 const domain::ConversionSettings& settings) {
-#ifdef DNGLAB_AVAILABLE
+#ifdef WITH_DNGLAB
     try {
         dnglab::Converter converter;
         dnglab::ConvertOptions opts;

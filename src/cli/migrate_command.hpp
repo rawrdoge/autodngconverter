@@ -4,8 +4,7 @@
  */
 #pragma once
 
-#ifdef WITH_MARIADB
-#ifdef WITH_POSTGRESQL
+#ifdef HAVE_MIGRATION
 
 #include <string>
 #include <vector>
@@ -32,5 +31,4 @@ void print_migrate_usage();
 
 } // namespace rawimport::cli
 
-#endif // WITH_POSTGRESQL
-#endif // WITH_MARIADB
+#endif // HAVE_MIGRATION

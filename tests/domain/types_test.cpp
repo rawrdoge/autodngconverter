@@ -78,10 +78,13 @@ TEST(fast_fingerprint_default) {
 // ─── Required config keys ─────────────────────────────────────────────────────
 TEST(required_config_keys_count) {
     auto keys = required_config_keys();
-    UTEST_ASSERT_EQ(keys.size(), 3u);
+    UTEST_ASSERT_EQ(keys.size(), 6u);
     UTEST_ASSERT_STRING(keys[0].name.c_str(), "OUTPUT_DIR");
     UTEST_ASSERT_STRING(keys[1].name.c_str(), "INPUT_DIR");
     UTEST_ASSERT_STRING(keys[2].name.c_str(), "CONVERTER_ENGINE");
+    UTEST_ASSERT_STRING(keys[3].name.c_str(), "DB_CONNECTION");
+    UTEST_ASSERT_STRING(keys[4].name.c_str(), "DATABASE_URL");
+    UTEST_ASSERT_STRING(keys[5].name.c_str(), "DB_DRIVER");
 }
 
 // ─── ConversionSettings defaults ──────────────────────────────────────────────

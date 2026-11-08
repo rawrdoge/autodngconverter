@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/migration_test.dir/link.d CMakeFiles/migration_test.dir/tests/migration/migration_test.cpp.o -o migration_test  libinfrastructure.a

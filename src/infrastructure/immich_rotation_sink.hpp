@@ -15,7 +15,7 @@ public:
     // Base URL ends WITHOUT trailing slash, e.g. "https://immich.example.com".
     explicit ImmichRotationSink(std::string base_url, std::string api_key);
 
-    HealthReport  health_check() override;
+    domain::HealthReport  health_check() override;
     bool          push_orientation(int64_t asset_id, int orientation) override;
 
 private:

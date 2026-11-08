@@ -75,14 +75,17 @@ public:
     int expire_stale_locks(int64_t max_age_seconds) override;
 
     // ── health ────────────────────────────────────────────────────────────────
-    HealthReport health_check() override;
+    domain::HealthReport health_check() override;
+
+    // ── schema initialization ──────────────────────────────────────────────────
+    bool init_schema() override;
 
 private:
     std::string conninfo_;
     PGconn* connect_() const;
     void    drop_(PGconn* conn) const;
     std::string pg_error_(PGconn* conn) const;
-    static std::string sql_escape(const std::string& s) const;
+    static std::string sql_escape(const std::string& s);
 };
 
 } // namespace rawimport::infrastructure

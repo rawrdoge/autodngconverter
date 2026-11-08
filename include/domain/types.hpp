@@ -128,7 +128,7 @@ struct ReconversionRecord {
 // ─── Preview edit ─────────────────────────────────────────────────────────────
 struct PreviewEdit {
     int64_t     id{-1};
-    int64_t     import_id;
+    int64_t     import_id{0};
     FilePath    preview_path;
     ConversionSettings settings;
     Instant     created_at;
@@ -149,7 +149,7 @@ struct Alert {
 // ─── Lock ─────────────────────────────────────────────────────────────────────
 struct Lock {
     int64_t     id{-1};
-    int64_t     import_id;
+    int64_t     import_id{0};
     std::string holder;
     Instant     acquired_at;
     Instant     expires_at;
@@ -194,6 +194,9 @@ inline std::vector<RequiredConfigKey> required_config_keys() {
         {"OUTPUT_DIR",   "Destination directory for converted DNG files"},
         {"INPUT_DIR",    "Watched directory containing RAW source files"},
         {"CONVERTER_ENGINE", "Converter engine to use (dnglab | adobedng)"},
+        {"DB_CONNECTION",    "Database connection string (libpq/MariaDB format)"},
+        {"DATABASE_URL",     "Alternative database connection string"},
+        {"DB_DRIVER",        "Database driver: postgresql | mariadb"},
     };
 }
 

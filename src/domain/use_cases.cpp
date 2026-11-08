@@ -138,6 +138,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
         store_.release_lock(*lock_opt);
         return outcome;
     }
+    rec.id = *rec_id;
 
     // Convert.
     auto result = engine_.convert(source_dng, output_dng, settings);

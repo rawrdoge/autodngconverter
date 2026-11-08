@@ -58,11 +58,14 @@
 /* Test registration                                                   */
 /* ------------------------------------------------------------------ */
 #define TEST(name)                                                               \
-	static void utest_fn_##name(void);                                        \
-	static utest_entry_t utest_reg_##name = {                              \
-		#name, utest_fn_##name, __FILE__, __LINE__                          \
-	};                                                                       \
-	static void utest_fn_##name(void)
+    static void utest_fn_##name(void);                                        \
+    static utest_entry_t utest_reg_##name = {                              \
+        #name, utest_fn_##name, __FILE__, __LINE__                          \
+    };                                                                       \
+    __attribute__((constructor)) static void utest_auto_reg_##name(void) { \
+        utest_register(&utest_reg_##name);                                 \
+    }                                                                        \
+    static void utest_fn_##name(void)
 
 #define UTEST_ENTRY extern utest_entry_t utest_reg_##name
 

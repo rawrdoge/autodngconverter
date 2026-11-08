@@ -107,13 +107,84 @@ using namespace rawimport::infrastructure;
 using namespace rawimport::use_cases;
 
 int run_application(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
-
     // ─── Load .env file if present ─────────────────────────────────────────────
     // Note: In production, use a proper dotenv library. Here we assume env vars
     // are already set (e.g., by systemd, docker, or shell).
     // load_dotenv(".env"); // Requires external lib; omitted for zero-dep build.
+
+    // Early exit for help command
+    if (argc < 2) {
+        std::cout << "Usage: rawimport <command> [args...]\n";
+        std::cout << "Commands: import, reconvert, scan, rotate, stats, config, migrate, watch\n";
+        return 0;
+    }
+
+    std::string command = argv[1];
+
+    // Commands that don't require full config validation (just show help)
+    if (command == "help") {
+        std::cout << "Usage: rawimport <command> [args...]\n";
+        std::cout << "Commands: import, reconvert, scan, rotate, stats, config, migrate, watch\n";
+        return 0;
+    }
+
+    // ─── Migrate Command (handles its own config via CLI args) ──────────────────
+#ifdef HAVE_MIGRATION
+    if (command == "migrate") {
+        migration::MigrationOptions opts;
+        std::string error_msg;
+
+        // Shift argv so argv[1] is the command we already consumed
+        // migrate_command expects args AFTER the subcommand
+        for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
+        --argc;
+
+        if (!parse_migrate_args(argc, argv, opts, error_msg)) {
+            std::cerr << "Error: " << error_msg << "\n";
+            print_migrate_usage();
+            return 1;
+        }
+
+        if (opts.guide_mode) {
+            auto result = run_guided_mode();
+            if (result.status == migration::MigrationStatus::Success) {
+                std::cout << "Guided migration setup completed.\n";
+            } else {
+                std::cerr << "Guided setup failed: " << result.message << "\n";
+                return 1;
+            }
+            return 0;
+        }
+
+        if (static_cast<int>(opts.from) == static_cast<int>(opts.to)) {
+            std::cerr << "Error: Source and target databases must differ.\n";
+            return 1;
+        }
+
+        std::cout << "=== rawimport migrate ===\n";
+        std::cout << "Running migration from "
+                  << (opts.from == migration::SourceDB::MariaDB ? "MariaDB" : "PostgreSQL")
+                  << " to "
+                  << (opts.to == migration::TargetDB::PostgreSQL ? "PostgreSQL" : "MariaDB") << "\n";
+        std::cout << "Source DSN: " << opts.source_dsn << "\n";
+        std::cout << "Target DSN: " << opts.target_dsn << "\n";
+        std::cout << "Dry run: " << (opts.dry_run ? "yes" : "no") << "\n";
+        std::cout << "Batch size: " << opts.batch_size << "\n";
+
+        migration::MigrationRunner runner(opts);
+        auto result = runner.run();
+        if (result.status == migration::MigrationStatus::Success) {
+            std::cout << result.message << "\n";
+            return 0;
+        } else {
+            std::cerr << "Migration failed: " << result.message << "\n";
+            for (const auto& w : result.warnings) {
+                std::cerr << "Warning: " << w << "\n";
+            }
+            return 1;
+        }
+    }
+#endif
 
     // ─── Config Provider ───────────────────────────────────────────────────────
     auto config = std::make_shared<EnvConfigProvider>("RAWIMPORT_");
@@ -135,14 +206,16 @@ int run_application(int argc, char** argv) {
     log->info("Starting rawimport CLI", {{"log_level", log_level_str}});
 
     // ─── Hash Service ──────────────────────────────────────────────────────────
+    std::shared_ptr<domain::HashService> hash_svc;
 #ifdef HAVE_OPENSSL
-    OpenSSLHashService hash_svc;
+    hash_svc = std::make_shared<OpenSSLHashService>();
 #else
-    NoopHashService hash_svc;
+    log->error("OpenSSL required for hash service; configure WITH_OPENSSL or install libssl-dev");
+    return 1;
 #endif
 
     // ─── File System ───────────────────────────────────────────────────────────
-    StdFileSystem fs(hash_svc);
+    StdFileSystem fs(*hash_svc);
 
     // ─── Import Store (selected by DB_DRIVER) ──────────────────────────────────
     std::string db_driver = config->get_string("DB_DRIVER").value_or("postgresql");
@@ -174,13 +247,20 @@ int run_application(int argc, char** argv) {
 #endif
     }
 
-    // Connect and migrate
+    // Connect and initialize schema
     auto health = store->health_check();
     if (health.status == HealthStatus::Unhealthy) {
         log->error("Database health check failed: " + health.message);
         return 1;
     }
     log->info("Database connected and healthy");
+
+    // Initialize schema
+    if (!store->init_schema()) {
+        log->error("Failed to initialize database schema");
+        return 1;
+    }
+    log->info("Database schema initialized");
 
     // ─── Converter Engine (via factory) ────────────────────────────────────────
     std::unique_ptr<ConverterEngine> engine;
@@ -243,75 +323,31 @@ int run_application(int argc, char** argv) {
     }
 
     // ─── Wire Use Cases ────────────────────────────────────────────────────────
-    Import import_uc(*store, *engine, *extractor, fs, hash_svc, *log, *metrics);
+    Import import_uc(*store, *engine, *extractor, fs, *hash_svc, *log, *metrics);
     Reconversion reconversion_uc(*store, *engine, fs, *log);
-    Scan scan_uc(*store, fs, hash_svc, *log);
-    Rotation rotation_uc(*store, *rotation_sink, *log);
+    Scan scan_uc(*store, fs, *hash_svc, *log);
     Stats stats_uc(*store);
     ConfigValidate config_uc(*config);
 
     // ─── Command Dispatch ──────────────────────────────────────────────────────
 
-    if (argc < 2) {
-        log->info("Usage: rawimport <command> [args...]");
-        log->info("Commands: import, reconvert, scan, rotate, stats, config, migrate");
-        return 0;
-    }
-
-    std::string command = argv[1];
-
-    // ─── Migrate Command ───────────────────────────────────────────────────────
-#ifdef WITH_MARIADB
-#ifdef WITH_POSTGRESQL
-    if (command == "migrate") {
-        migration::MigrationOptions opts;
-        std::string error_msg;
-
-        // Shift argv so argv[1] is the command we already consumed
-        // migrate_command expects args AFTER the subcommand
-        for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
-        --argc;
-
-        if (!parse_migrate_args(argc, argv, opts, error_msg)) {
-            std::cerr << "Error: " << error_msg << "\n";
-            print_migrate_usage();
+    // ─── Watch Command (service mode) ──────────────────────────────────────────
+    if (command == "watch") {
+        std::string watch_dir = config->get_string("INPUT_DIR").value_or("");
+        if (watch_dir.empty()) {
+            log->error("INPUT_DIR not configured for watch mode");
             return 1;
         }
-
-        if (opts.guide_mode) {
-            auto result = run_guided_mode();
-            if (result.status == migration::MigrationStatus::Success) {
-                std::cout << "Guided migration setup completed.\n";
-            } else {
-                std::cerr << "Guided setup failed: " << result.message << "\n";
-                return 1;
-            }
-            return 0;
-        }
-
-        if (opts.from == opts.to) {
-            std::cerr << "Error: Source and target databases must differ.\n";
-            return 1;
-        }
-
-        std::cout << "=== rawimport migrate ===\n";
-        std::cout << "Running migration from "
-                  << (opts.from == migration::SourceDB::MariaDB ? "MariaDB" : "PostgreSQL")
-                  << " to "
-                  << (opts.to == migration::TargetDB::PostgreSQL ? "PostgreSQL" : "MariaDB") << "\n";
-        std::cout << "Source DSN: " << opts.source_dsn << "\n";
-        std::cout << "Target DSN: " << opts.target_dsn << "\n";
-        std::cout << "Dry run: " << (opts.dry_run ? "yes" : "no") << "\n";
-        std::cout << "Batch size: " << opts.batch_size << "\n";
-
-        // In production, this would create the MigrationRunner and execute.
-        // For now, we report that the full pipeline requires database adapters.
-        std::cout << "Migrate command received (full runner integration pending).";
-
+        log->info("Starting watch mode", {{"watch_dir", watch_dir}});
+        // In production, this would run a filesystem watcher loop.
+        // For now, we run a single scan as a demo.
+        auto extensions = engine->supported_extensions();
+        auto result = scan_uc.execute(watch_dir, extensions);
+        log->info("Watch scan complete",
+                  {{"new_files", std::to_string(result.new_files.size())},
+                   {"unchanged", std::to_string(result.unchanged_files.size())}});
         return 0;
     }
-#endif
-#endif
 
     try {
         if (command == "import") {
@@ -386,6 +422,7 @@ int run_application(int argc, char** argv) {
                 log->error("Rotation sink not configured (IMMICH_BASE_URL and IMMICH_API_KEY required)");
                 return 1;
             }
+            Rotation rotation_uc(*store, *rotation_sink, *log);
             int64_t import_id = std::stoll(argv[2]);
             int orientation = std::stoi(argv[3]);
             auto outcome = rotation_uc.execute(import_id, orientation);

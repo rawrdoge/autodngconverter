@@ -28,15 +28,16 @@ std::optional<domain::FilePath> StdFileSystem::move_file(const domain::FilePath&
     const auto sp = to_fs(src);
     const auto dp = to_fs(dst);
 
+    // Hash source BEFORE any rename (for cross-device verification).
+    auto h_src = sha256_file(src);
+
     // Try direct rename first (same filesystem).
     std::error_code ec;
     std::filesystem::rename(sp, dp, ec);
     if (!ec) {
-        // Verify hash on both sides (best-effort).
-        auto h_src = sha256_file(src);
+        // Verify hash on destination side.
         auto h_dst = sha256_file(dst);
         if (h_src && h_dst && *h_src == *h_dst) {
-            delete_file(src);
             return dst;
         }
         // Hash mismatch — move file back (best-effort).
@@ -46,7 +47,6 @@ std::optional<domain::FilePath> StdFileSystem::move_file(const domain::FilePath&
 
     // Cross-device fallback: copy + verify + remove source.
     if (std::filesystem::copy_file(sp, dp, ec)) {
-        auto h_src = sha256_file(src);
         auto h_dst = sha256_file(dst);
         if (h_src && h_dst && *h_src == *h_dst) {
             delete_file(src);

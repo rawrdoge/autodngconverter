@@ -83,33 +83,44 @@ MigrationResult MigrationRunner::run() {
     r = verify_not_empty_();
     if (r.status != MigrationStatus::Success) return r;
 
+    // In dry-run mode, all subsequent steps return SkippedDryRun.
+    // We treat this as success for the overall migration.
+    bool is_dry_run = opts_.dry_run;
+
     // 6. Stream sequences (CRITICAL: preserve exact seq values)
     r = stream_sequences_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 7. Stream imports
     r = stream_imports_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 8. Stream reconversions
     r = stream_reconversions_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 9. Stream preview_edits
     r = stream_preview_edits_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 10. Stream alerts
     r = stream_alerts_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 11. Reset target sequences: setval('sequences_id_seq', max_seq + 1)
     r = reset_target_sequences_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 12. Verify counts match
     r = verify_counts_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // Success
     auto end = std::chrono::steady_clock::now();

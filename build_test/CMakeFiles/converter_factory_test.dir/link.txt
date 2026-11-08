@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/converter_factory_test.dir/link.d CMakeFiles/converter_factory_test.dir/tests/infrastructure/converter_factory_test.cpp.o -o converter_factory_test  libinfrastructure.a

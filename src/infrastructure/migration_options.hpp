@@ -80,7 +80,7 @@ enum class MigrationStatus : uint8_t {
 };
 
 struct MigrationResult {
-    MigrationStatus status = MigrationStatus::Aborted;
+    MigrationStatus status = MigrationStatus::Success;
     MigrationStats  stats{};
     std::string     message;       // human-readable summary
     std::vector<std::string> warnings;

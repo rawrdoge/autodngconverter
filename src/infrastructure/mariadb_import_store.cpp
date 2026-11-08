@@ -74,7 +74,7 @@ void MariadbImportStore::drop_(MariadbHandle conn) const {
     if (conn) mariadb_close(conn);
 }
 
-std::string MariadbImportStore::sql_escape(const std::string& s) const {
+std::string MariadbImportStore::sql_escape(const std::string& s) {
     // Use parameterized queries in production; this is a simplification.
     std::string out = "\"";
     for (char c : s) {
@@ -285,6 +285,119 @@ domain::HealthReport MariadbImportStore::health_check() {
     }
     drop_(conn);
     return {domain::HealthStatus::Healthy, "MariaDB OK", domain::now()};
+}
+
+// ── schema initialization ──────────────────────────────────────────────────
+bool MariadbImportStore::init_schema() {
+    auto conn = connect_();
+    if (!conn) return false;
+
+    // MariaDB/MySQL schema (uses backticks for identifiers)
+    const char* schema_sql[] = {
+        // sequences
+        "CREATE TABLE IF NOT EXISTS `sequences` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `name` VARCHAR(32) NOT NULL UNIQUE,"
+        "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        ") ENGINE=InnoDB",
+        // imports
+        "CREATE TABLE IF NOT EXISTS `imports` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `sequence_id` BIGINT UNSIGNED NOT NULL,"
+        "    `source_path` TEXT NOT NULL,"
+        "    `source_hash` CHAR(64) NOT NULL,"
+        "    `output_path` TEXT NOT NULL,"
+        "    `output_hash` CHAR(64) NOT NULL,"
+        "    `camera_model` VARCHAR(64),"
+        "    `capture_date` DATE,"
+        "    `capture_time` TIME,"
+        "    `date_source` ENUM('exif','mtime') NOT NULL DEFAULT 'exif',"
+        "    `folder_schema` VARCHAR(16),"
+        "    `conversion_settings` JSON,"
+        "    `status` ENUM('pending','converting','completed','failed','restored','legacy') DEFAULT 'pending',"
+        "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
+        "    `error_message` TEXT,"
+        "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
+        "    `orientation` TINYINT UNSIGNED NULL COMMENT 'EXIF Orientation 1-8 agreed across apps, NULL means unset'"
+        ") ENGINE=InnoDB",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_source_hash` ON `imports`(`source_hash`)",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_output_hash` ON `imports`(`output_hash`)",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_sequence_id` ON `imports`(`sequence_id`)",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_capture_date` ON `imports`(`capture_date`)",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_status_created` ON `imports`(`status`, `created_at`)",
+        "CREATE INDEX IF NOT EXISTS `idx_imports_camera_date` ON `imports`(`camera_model`, `capture_date`)",
+        // reconversions
+        "CREATE TABLE IF NOT EXISTS `reconversions` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `import_id` BIGINT UNSIGNED NOT NULL,"
+        "    `previous_output_hash` CHAR(64) NOT NULL,"
+        "    `new_output_hash` CHAR(64),"
+        "    `conversion_settings` JSON NOT NULL,"
+        "    `reason` TEXT,"
+        "    `triggered_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
+        "    `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',"
+        "    `error_message` TEXT"
+        ") ENGINE=InnoDB",
+        "CREATE INDEX IF NOT EXISTS `idx_reconversions_import_id` ON `reconversions`(`import_id`)",
+        "CREATE INDEX IF NOT EXISTS `idx_reconversions_status` ON `reconversions`(`status`)",
+        // locks
+        "CREATE TABLE IF NOT EXISTS `locks` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `import_id` BIGINT UNSIGNED NOT NULL,"
+        "    `holder` VARCHAR(64),"
+        "    `acquired_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `expires_at` TIMESTAMP NOT NULL,"
+        "    `released_at` TIMESTAMP NULL DEFAULT NULL"
+        ") ENGINE=InnoDB",
+        "CREATE INDEX IF NOT EXISTS `idx_locks_import_id` ON `locks`(`import_id`)",
+        "CREATE INDEX IF NOT EXISTS `idx_locks_expires` ON `locks`(`expires_at`)",
+        // alerts
+        "CREATE TABLE IF NOT EXISTS `alerts` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `severity` ENUM('info','warning','error') NOT NULL,"
+        "    `category` VARCHAR(32) NOT NULL,"
+        "    `message` TEXT NOT NULL,"
+        "    `ref_sequence` VARCHAR(32),"
+        "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `acknowledged` TINYINT(1) DEFAULT 0"
+        ") ENGINE=InnoDB",
+        "CREATE INDEX IF NOT EXISTS `idx_alerts_severity_created` ON `alerts`(`severity`, `created_at`)",
+        "CREATE INDEX IF NOT EXISTS `idx_alerts_acknowledged` ON `alerts`(`acknowledged`)",
+        // preview_edits
+        "CREATE TABLE IF NOT EXISTS `preview_edits` ("
+        "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        "    `import_id` BIGINT UNSIGNED NOT NULL,"
+        "    `worker` VARCHAR(16) NOT NULL COMMENT 'exiftool|dnglab|dng_sdk',"
+        "    `previous_output_hash` CHAR(64) NOT NULL,"
+        "    `new_output_hash` CHAR(64) NOT NULL,"
+        "    `preview_width` INT UNSIGNED,"
+        "    `preview_height` INT UNSIGNED,"
+        "    `preview_quality` TINYINT UNSIGNED,"
+        "    `edited_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        ") ENGINE=InnoDB",
+        "CREATE INDEX IF NOT EXISTS `idx_preview_edits_import_id` ON `preview_edits`(`import_id`)",
+        "CREATE INDEX IF NOT EXISTS `idx_preview_edits_edited_at` ON `preview_edits`(`edited_at`)",
+        // foreign keys
+        "ALTER TABLE `imports` ADD CONSTRAINT `fk_imports_sequence` "
+        "FOREIGN KEY (`sequence_id`) REFERENCES `sequences`(`id`) ON DELETE RESTRICT",
+        "ALTER TABLE `reconversions` ADD CONSTRAINT `fk_reconversions_import` "
+        "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
+        "ALTER TABLE `preview_edits` ADD CONSTRAINT `fk_preview_edits_import` "
+        "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
+    };
+
+    for (const char* sql : schema_sql) {
+        if (mariadb_query(conn, sql) != 0) {
+            std::cerr << "Schema init failed: " << mariadb_error(conn) << " (SQL: " << sql << ")\n";
+            drop_(conn);
+            return false;
+        }
+    }
+
+    drop_(conn);
+    return true;
 }
 
 // ── migration streaming helpers ──────────────────────────────────────────────

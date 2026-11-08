@@ -78,6 +78,9 @@ TEST(env_config_validate_present) {
     setenv("RAWIMPORT_OUTPUT_DIR", "/tmp/out", 1);
     setenv("RAWIMPORT_INPUT_DIR",  "/tmp/in", 1);
     setenv("RAWIMPORT_CONVERTER_ENGINE", "dnglab", 1);
+    setenv("RAWIMPORT_DB_CONNECTION", "postgresql://user:pass@localhost/db", 1);
+    setenv("RAWIMPORT_DATABASE_URL", "postgresql://user:pass@localhost/db", 1);
+    setenv("RAWIMPORT_DB_DRIVER", "postgresql", 1);
     EnvConfigProvider cfg("RAWIMPORT_");
     auto report = cfg.validate(required_config_keys());
     UTEST_ASSERT(report.valid == true);
@@ -85,6 +88,9 @@ TEST(env_config_validate_present) {
     unsetenv("RAWIMPORT_OUTPUT_DIR");
     unsetenv("RAWIMPORT_INPUT_DIR");
     unsetenv("RAWIMPORT_CONVERTER_ENGINE");
+    unsetenv("RAWIMPORT_DB_CONNECTION");
+    unsetenv("RAWIMPORT_DATABASE_URL");
+    unsetenv("RAWIMPORT_DB_DRIVER");
 }
 
 TEST(env_config_to_map) {

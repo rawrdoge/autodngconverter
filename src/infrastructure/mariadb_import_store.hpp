@@ -76,7 +76,10 @@ public:
     int expire_stale_locks(int64_t max_age_seconds) override;
 
     // ── health ────────────────────────────────────────────────────────────────
-    HealthReport health_check() override;
+    domain::HealthReport health_check() override;
+
+    // ── schema initialization ──────────────────────────────────────────────────
+    bool init_schema() override;
 
 private:
     std::string connection_string_;
@@ -84,7 +87,7 @@ private:
     void drop_(MariadbHandle conn) const;
 
     // Helper: escape string for SQL.
-    static std::string sql_escape(const std::string& s) const;
+    static std::string sql_escape(const std::string& s);
 };
 
 } // namespace rawimport::infrastructure

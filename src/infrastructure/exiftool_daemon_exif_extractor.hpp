@@ -18,7 +18,7 @@ public:
     explicit ExiftoolDaemonExifExtractor(std::string binary_path = "");
     ~ExiftoolDaemonExifExtractor() override;
 
-    HealthReport                      health_check() override;
+    domain::HealthReport                      health_check() override;
     std::optional<domain::ExifResult> extract(const domain::FilePath& path) override;
 
     // Non-copyable

@@ -18,6 +18,7 @@ CounterEntry& PrometheusMetricsSink::get_counter(
     if (it != counters_.end()) return *it->second;
     auto e = std::make_unique<CounterEntry>();
     e->labels = labels;
+    e->name = name;
     auto ptr = e.get();
     counters_[key] = std::move(e);
     return *ptr;
@@ -30,6 +31,7 @@ HistogramEntry& PrometheusMetricsSink::get_histogram(
     if (it != histograms_.end()) return *it->second;
     auto e = std::make_unique<HistogramEntry>();
     e->labels = labels;
+    e->name = name;
     auto ptr = e.get();
     histograms_[key] = std::move(e);
     return *ptr;
@@ -38,7 +40,8 @@ HistogramEntry& PrometheusMetricsSink::get_histogram(
 std::string PrometheusMetricsSink::make_label_str(const std::map<std::string, std::string>& labels) const {
     std::string s;
     for (const auto& [k, v] : labels) {
-        s += k + "=" + v + ",";
+        if (!s.empty()) s += ",";
+        s += k + "=\"" + v + "\"";
     }
     return s;
 }
@@ -63,23 +66,29 @@ std::string PrometheusMetricsSink::render_prometheus() {
 
     for (const auto& [key, counter] : counters_) {
         const std::string label_str = make_label_str(counter->labels);
-        oss << "# HELP " << key << " Counter\n";
-        oss << "# TYPE " << key << " counter\n";
+        oss << "# HELP " << counter->name << " Counter\n";
+        oss << "# TYPE " << counter->name << " counter\n";
         if (!label_str.empty())
-            oss << key << "{" << label_str.substr(0, label_str.size()-1) << "} "
+            oss << counter->name << "{" << label_str << "} "
                 << counter->value.load(std::memory_order_relaxed) << "\n";
         else
-            oss << key << " " << counter->value.load(std::memory_order_relaxed) << "\n";
+            oss << counter->name << " " << counter->value.load(std::memory_order_relaxed) << "\n";
     }
 
     for (const auto& [key, hist_ptr] : histograms_) {
         const std::string label_str = make_label_str(hist_ptr->labels);
-        oss << "# HELP " << key << "_sum Histogram sum\n";
-        oss << "# TYPE " << key << "_sum summary\n";
-        oss << key << "_sum" << (!label_str.empty() ? "{" + label_str.substr(0, label_str.size()-1) + "}" : "")
-            << " " << std::fixed << std::setprecision(6) << hist_ptr->sum << "\n";
-        oss << key << "_count" << (!label_str.empty() ? "{" + label_str.substr(0, label_str.size()-1) + "}" : "")
-            << " " << hist_ptr->count << "\n";
+        const std::string base_name = hist_ptr->name;
+        oss << "# HELP " << base_name << "_sum Histogram sum\n";
+        oss << "# TYPE " << base_name << "_sum summary\n";
+        if (!label_str.empty())
+            oss << base_name << "_sum{" << label_str << "} "
+                << std::fixed << std::setprecision(6) << hist_ptr->sum << "\n";
+        else
+            oss << base_name << "_sum " << std::fixed << std::setprecision(6) << hist_ptr->sum << "\n";
+        if (!label_str.empty())
+            oss << base_name << "_count{" << label_str << "} " << hist_ptr->count << "\n";
+        else
+            oss << base_name << "_count " << hist_ptr->count << "\n";
     }
 
     return oss.str();
