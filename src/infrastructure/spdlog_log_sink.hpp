@@ -60,6 +60,14 @@ public:
                                         int exit_code,
                                         std::string_view stderr_tail) override;
 
+    void LogImportFailed(std::string_view sequence_id,
+                         std::string_view reason) override;
+
+    void LogCollisionDuplicateFound(std::string_view sequence_id,
+                                    std::string_view existing_sequence_id,
+                                    const domain::SHA256Hash& source_hash,
+                                    std::string_view duplicate_path) override;
+
     void LogConversionFailedHashMismatch(std::string_view sequence_id,
                                          std::string_view source_hash,
                                          std::string_view output_hash) override;

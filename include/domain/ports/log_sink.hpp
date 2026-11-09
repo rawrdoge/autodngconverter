@@ -66,6 +66,16 @@ public:
                                                 int exit_code,
                                                 std::string_view stderr_tail) = 0;
 
+    /// Import failed: conversion or processing error (with human-readable reason)
+    virtual void LogImportFailed(std::string_view sequence_id,
+                                 std::string_view reason) = 0;
+
+    /// Collision: duplicate by hash (non-fatal, existing record returned)
+    virtual void LogCollisionDuplicateFound(std::string_view sequence_id,
+                                            std::string_view existing_sequence_id,
+                                            const SHA256Hash& source_hash,
+                                            std::string_view duplicate_path) = 0;
+
     /// Conversion failed: hash mismatch (corrupt output)
     virtual void LogConversionFailedHashMismatch(std::string_view sequence_id,
                                                  std::string_view source_hash,

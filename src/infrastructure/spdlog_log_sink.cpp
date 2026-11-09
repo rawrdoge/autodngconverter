@@ -208,6 +208,30 @@ public:
         LogStructured("conversion.failed.engine_error", "ERROR", fields);
     }
 
+    // import.failed (ERROR)
+    void LogImportFailed(std::string_view sequence_id,
+                         std::string_view reason) override {
+        std::unordered_map<std::string, std::string> fields = {
+            {"sequence_id", std::string(sequence_id)},
+            {"reason", std::string(reason)}
+        };
+        LogStructured("import.failed", "ERROR", fields);
+    }
+
+    // collision.duplicate_found (WARN)
+    void LogCollisionDuplicateFound(std::string_view sequence_id,
+                                    std::string_view existing_sequence_id,
+                                    const domain::SHA256Hash& source_hash,
+                                    std::string_view duplicate_path) override {
+        std::unordered_map<std::string, std::string> fields = {
+            {"sequence_id", std::string(sequence_id)},
+            {"existing_sequence_id", std::string(existing_sequence_id)},
+            {"source_hash", domain::sha256_hex(source_hash)},
+            {"duplicate_path", std::string(duplicate_path)}
+        };
+        LogStructured("collision.duplicate_found", "WARN", fields);
+    }
+
     // conversion.failed.hash_mismatch (ERROR)
     void LogConversionFailedHashMismatch(std::string_view sequence_id,
                                          std::string_view source_hash,
@@ -463,6 +487,18 @@ void SpdlogLogSink::LogConversionFailedEngineError(std::string_view sequence_id,
                                                    int exit_code,
                                                    std::string_view stderr_tail) {
     impl_->LogConversionFailedEngineError(sequence_id, engine_name, exit_code, stderr_tail);
+}
+
+void SpdlogLogSink::LogImportFailed(std::string_view sequence_id,
+                                    std::string_view reason) {
+    impl_->LogImportFailed(sequence_id, reason);
+}
+
+void SpdlogLogSink::LogCollisionDuplicateFound(std::string_view sequence_id,
+                                               std::string_view existing_sequence_id,
+                                               const domain::SHA256Hash& source_hash,
+                                               std::string_view duplicate_path) {
+    impl_->LogCollisionDuplicateFound(sequence_id, existing_sequence_id, source_hash, duplicate_path);
 }
 
 void SpdlogLogSink::LogConversionFailedHashMismatch(std::string_view sequence_id,

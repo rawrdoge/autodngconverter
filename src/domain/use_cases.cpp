@@ -51,6 +51,11 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         if (existing->status == domain::ImportStatus::Completed) {
             outcome.error = "Duplicate import detected: file already imported (import_id=" +
                             std::to_string(existing->sequence_id) + ")";
+            log_.LogCollisionDuplicateFound(
+                rec.output_path.filename(),
+                existing->output_path.filename(),
+                source_hash,
+                source.native);
             log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
             outcome.record = *existing;
             return outcome;  // Not a failure, but duplicate detected
@@ -150,6 +155,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         store_.update_import(rec);
         outcome.error = "Conversion failed";
         metrics_.increment_counter("imports_failed", 1, {{"engine", engine_name(settings.engine)}});
+        log_.LogImportFailed(std::to_string(rec.sequence_id), outcome.error);
         log_.error(outcome.error, {{"source", source.native}});
         return outcome;
     }
