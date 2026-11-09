@@ -9,15 +9,26 @@
 
 namespace rawimport::infrastructure {
 
-EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
-
-std::string EnvConfigProvider::resolve_key(const std::string& key) const {
+// ─── EnvConfigProvider ────────────────────────────────────────────────────────
+// Resolve a logical key to either prefixed (RAWIMPORT_*) or unprefixed (legacy).
+// Supports aliases: INPUT_DIR <-> WATCH_DIR.
+static std::string resolve_config_key(const std::string& prefix, const std::string& key) {
     // First check for prefixed key (new format)
-    std::string prefixed = prefix_ + key;
+    std::string prefixed = prefix + key;
     if (std::getenv(prefixed.c_str())) return prefixed;
     // Fall back to unprefixed key (legacy format, e.g., OUTPUT_DIR, WATCH_DIR)
     if (std::getenv(key.c_str())) return key;
+    // Alias: INPUT_DIR -> WATCH_DIR (legacy docker-compose uses WATCH_DIR)
+    if (key == "INPUT_DIR") {
+        if (std::getenv("WATCH_DIR")) return "WATCH_DIR";
+    }
     return prefixed; // return prefixed for consistent error messages
+}
+
+EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
+
+std::string EnvConfigProvider::resolve_key(const std::string& key) const {
+    return resolve_config_key(prefix_, key);
 }
 
 std::optional<std::string> EnvConfigProvider::get_string(const std::string& key) {

@@ -351,9 +351,13 @@ int run_application(int argc, char** argv) {
 
     // ─── Watch Command (service mode) ──────────────────────────────────────────
     if (command == "watch") {
+        // Accept both INPUT_DIR (new) and WATCH_DIR (legacy docker-compose)
         std::string watch_dir = config->get_string("INPUT_DIR").value_or("");
         if (watch_dir.empty()) {
-            log->error("INPUT_DIR not configured for watch mode");
+            watch_dir = config->get_string("WATCH_DIR").value_or("");
+        }
+        if (watch_dir.empty()) {
+            log->error("INPUT_DIR (or legacy WATCH_DIR) not configured for watch mode");
             return 1;
         }
         log->info("Starting watch mode", {{"watch_dir", watch_dir}});
