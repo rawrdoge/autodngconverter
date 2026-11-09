@@ -142,7 +142,12 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     // 6. Update status → Converting.
     rec.status = domain::ImportStatus::Converting;
     rec.started_at = domain::now();
-    store_.update_import(rec);
+    if (!store_.update_import(rec)) {
+        outcome.error = "Failed to update import status to converting";
+        log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false");
+        log_.error(outcome.error);
+        return outcome;
+    }
 
     // 7. Extract EXIF.
     auto exif_opt = extractor_.extract(source);
@@ -177,7 +182,18 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     rec.status     = domain::ImportStatus::Completed;
     rec.output_path = *result;
     rec.completed_at = domain::now();
-    store_.update_import(rec);
+    // Compute output file hash for verification.
+    int out_hash_errno = 0;
+    auto out_hash_opt = fs_.sha256_file(*result, &out_hash_errno);
+    if (out_hash_opt) {
+        rec.output_hash = *out_hash_opt;
+    }
+    if (!store_.update_import(rec)) {
+        outcome.error = "Failed to update import record on completion";
+        log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false on completion");
+        log_.error(outcome.error);
+        return outcome;
+    }
 
     outcome.record       = rec;
     outcome.success      = true;

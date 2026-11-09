@@ -46,7 +46,7 @@ std::string timestamp_to_iso(timeval tv) {
 // Parse IMPORTS row into ImportRecord.
 domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
-    if (!row || ncols < 21) return r;
+    if (!row || ncols < 22) return r;
     r.sequence_id      = atoll(row[1]);  // sequence_id is column 2
     r.source_path.native = row[2] ? row[2] : "";
     // source_hash is column 4 (index 3)
@@ -57,15 +57,22 @@ domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
         }
     }
     r.output_path.native = row[4] ? row[4] : "";
-    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
-    r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
-    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
-    if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
-    if (row[19]) {
-        auto secs = atoll(row[19]);
+    // output_hash is column 5 (index 4)
+    if (row[4] && strlen(row[4]) == 64) {
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {row[4][i*2], row[4][i*2+1], 0};
+            r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
+    }
+    r.status           = static_cast<domain::ImportStatus>(row[13] ? std::atoi(row[13]) : 0);  // status is column 14
+    r.error_message    = row[16] ? row[16] : "";  // error_message is column 17
+    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
+    if (row[19]) r.source_fingerprint.size_bytes = atoll(row[19]);
+    if (row[20]) {
+        auto secs = atoll(row[20]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (row[20]) r.source_fingerprint.fnv1a = atoll(row[20]);
+    if (row[21]) r.source_fingerprint.fnv1a = atoll(row[21]);
     r.created_at       = domain::now();
     r.started_at       = domain::now();
     r.completed_at     = domain::now();
@@ -87,7 +94,7 @@ void MariadbImportStore::drop_(MariadbHandle conn) const {
     if (conn) mariadb_close(conn);
 }
 
-std::string MariadbImportStore::sql_escape(const std::string& s) {
+std::string MariadbImportStore::sql_escape(MariadbHandle conn, const std::string& s) const {
     // Use parameterized queries in production; this is a simplification.
     std::string out = "\"";
     for (char c : s) {
@@ -103,23 +110,25 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    std::string hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, status, error_message,"
+    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
-           " VALUES ("
-           << sql_escape(rec.source_path.native) << ", "
-           << sql_escape(hash_hex) << ", "
-           << sql_escape(rec.output_path.native) << ", "
+           << " VALUES ("
+           << sql_escape(conn, rec.source_path.native) << ", "
+           << sql_escape(conn, source_hash_hex) << ", "
+           << sql_escape(conn, rec.output_path.native) << ", "
+           << sql_escape(conn, output_hash_hex) << ", "
            << static_cast<int>(rec.status) << ", "
-           << sql_escape(rec.error_message) << ", "
+           << sql_escape(conn, rec.error_message) << ", "
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
            << rec.source_fingerprint.fnv1a << ", "
-           << "'"+timestamp_to_iso({0,0})+"', "
-           << "'"+timestamp_to_iso({0,0})+"', "
-           << "'"+timestamp_to_iso({0,0})+"'"
+           << "'" + timestamp_to_iso({0,0}) + "', "
+           << "'" + timestamp_to_iso({0,0}) + "', "
+           << "'" + timestamp_to_iso({0,0}) + "'"
            << ")";
 
     if (mariadb_query(conn, sql.str().c_str()) != 0) {
@@ -155,7 +164,7 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
 
     std::string hash_hex = domain::sha256_hex(hash);
     std::ostringstream sql;
-    sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(hash_hex) << " LIMIT 1";
+    sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(conn, hash_hex) << " LIMIT 1";
     if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MARIADB_RES* res = mariadb_store_result(conn);
@@ -172,11 +181,13 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
     auto conn = connect_();
     if (!conn) return false;
 
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
     sql << "UPDATE imports SET status=" << static_cast<int>(rec.status)
-        << ", error_message=" << sql_escape(rec.error_message)
+        << ", error_message=" << sql_escape(conn, rec.error_message)
         << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
-        << ", output_path=" << sql_escape(rec.output_path.native)
+        << ", output_path=" << sql_escape(conn, rec.output_path.native)
+        << ", output_hash=" << sql_escape(conn, output_hash_hex)
         << " WHERE sequence_id=" << rec.sequence_id;
 
     bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
@@ -216,10 +227,10 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
     sql << "INSERT INTO reconversions (import_id, source_dng_path, output_dng_path, status,"
            " error_message, scheduled_at, started_at, completed_at)"
            << " VALUES (" << rec.import_id << ", "
-           << sql_escape(rec.source_dng_path.native) << ", "
-           << sql_escape(rec.output_dng_path.native) << ", "
+           << sql_escape(conn, rec.source_dng_path.native) << ", "
+           << sql_escape(conn, rec.output_dng_path.native) << ", "
            << static_cast<int>(rec.status) << ", "
-           << sql_escape(rec.error_message) << ", '"
+           << sql_escape(conn, rec.error_message) << ", '"
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "')";
@@ -236,8 +247,18 @@ std::optional<domain::ReconversionRecord> MariadbImportStore::get_reconversion(i
 }
 
 bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
-    (void)rec;
-    return false;
+    auto conn = connect_();
+    if (!conn) return false;
+
+    std::ostringstream sql;
+    sql << "UPDATE reconversions SET status=" << static_cast<int>(rec.status)
+        << ", error_message=" << sql_escape(conn, rec.error_message)
+        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
+        << " WHERE id=" << rec.id;
+
+    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    drop_(conn);
+    return ok;
 }
 
 std::vector<domain::ReconversionRecord> MariadbImportStore::list_reconversions(int64_t import_id) {
@@ -258,10 +279,93 @@ bool MariadbImportStore::delete_alert(int64_t) { return false; }
 std::vector<domain::Alert> MariadbImportStore::list_alerts(std::optional<int64_t>) { return {}; }
 
 // ── locks ─────────────────────────────────────────────────────────────────────
-std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t, const std::string&) { return std::nullopt; }
-bool MariadbImportStore::release_lock(int64_t) { return false; }
-bool MariadbImportStore::is_locked(int64_t) { return false; }
-std::vector<domain::Lock> MariadbImportStore::list_active_locks() { return {}; }
+std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
+    auto conn = connect_();
+    if (!conn) return std::nullopt;
+    
+    // Insert lock record with expiration (1 hour from now).
+    std::string import_id_str = std::to_string(import_id);
+    std::string holder_str = sql_escape(conn, holder);
+    std::string acquired_str = timestamp_now(); // in production use NOW()
+    // expires_at = acquired_at + 1 hour (3600 seconds) - simplified
+    std::string expires_str = timestamp_now(); // simplified - in production add interval
+
+    std::ostringstream sql;
+    sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
+        << import_id_str << ", "
+        << holder_str << ", "
+        << "'" << acquired_str << "', "
+        << "'" << expires_str << "')";
+
+    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+    int64_t lock_id = static_cast<int64_t>(mariadb_insert_id(conn));
+    drop_(conn);
+    return lock_id;
+}
+
+bool MariadbImportStore::release_lock(int64_t lock_id) {
+    auto conn = connect_();
+    if (!conn) return false;
+    
+    std::string lock_id_str = std::to_string(lock_id);
+    std::ostringstream sql;
+    sql << "UPDATE `locks` SET released_at=NOW() WHERE id=" << lock_id_str << " AND released_at IS NULL";
+
+    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    drop_(conn);
+    return ok;
+}
+
+bool MariadbImportStore::is_locked(int64_t import_id) {
+    auto conn = connect_();
+    if (!conn) return false;
+    
+    std::string import_id_str = std::to_string(import_id);
+    std::ostringstream sql;
+    sql << "SELECT COUNT(*) FROM `locks` WHERE import_id=" << import_id_str << " AND released_at IS NULL";
+
+    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+        drop_(conn);
+        return false;
+    }
+    MARIADB_RES* res = mariadb_store_result(conn);
+    drop_(conn);
+    if (!res) return false;
+    
+    MARIADB_ROW row = mariadb_fetch_row(res);
+    bool locked = (row && row[0] && atoll(row[0]) > 0);
+    mariadb_result_free(res);
+    return locked;
+}
+
+std::vector<domain::Lock> MariadbImportStore::list_active_locks() {
+    auto conn = connect_();
+    if (!conn) return {};
+    
+    if (mariadb_query(conn, "SELECT id, import_id, holder, acquired_at, expires_at, released_at FROM `locks` WHERE released_at IS NULL") != 0) {
+        drop_(conn);
+        return {};
+    }
+    MARIADB_RES* res = mariadb_store_result(conn);
+    drop_(conn);
+    if (!res) return {};
+    
+    std::vector<domain::Lock> result;
+    MARIADB_ROW row;
+    while ((row = mariadb_fetch_row(res))) {
+        domain::Lock l;
+        if (row[0]) l.id = atoll(row[0]);
+        if (row[1]) l.import_id = atoll(row[1]);
+        if (row[2]) l.holder = row[2];
+        // Parse timestamps if needed
+        result.push_back(l);
+    }
+    mariadb_result_free(res);
+    return result;
+}
 
 // ── sequences ─────────────────────────────────────────────────────────────────
 int64_t MariadbImportStore::next_sequence_id() {
@@ -550,7 +654,7 @@ bool MariadbImportStore::bulk_insert_migration(const std::string& table,
         cols << "`" << columns[i] << "`";
     }
 
-    // Build multi-row INSERT
+    // Build multi-row INSERT with properly quoted values
     std::ostringstream sql;
     sql << "INSERT INTO `" << table << "` (" << cols.str() << ") VALUES ";
 
@@ -559,7 +663,13 @@ bool MariadbImportStore::bulk_insert_migration(const std::string& table,
         sql << "(";
         for (size_t c = 0; c < columns.size(); ++c) {
             if (c) sql << ", ";
-            sql << sql_escape(conn, values[r][c]);
+            std::string val = values[r][c];
+            // Empty string -> NULL, otherwise quote the escaped value
+            if (val.empty()) {
+                sql << "NULL";
+            } else {
+                sql << "'" << sql_escape(conn, val) << "'";
+            }
         }
         sql << ")";
     }

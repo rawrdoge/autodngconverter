@@ -58,15 +58,17 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
 
         const auto result = converter.convert(source.native, dest.native, opts);
         if (result.success) return dest;
-        return std::nullopt;
     } catch (...) {
-        return std::nullopt;
+        // Fall through to binary fallback
     }
-#else
+
+    // Fall through to CLI fallback if library conversion fails
+#endif
+
     // CLI fallback: invoke dnglab binary if available.
     const char* path_env = std::getenv("PATH");
     if (!path_env) return std::nullopt;
-    
+
     std::string bin;
     std::istringstream ss(path_env);
     std::string dir;
@@ -93,17 +95,22 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
     args.push_back(source.native);
     args.push_back(dest.native);
 
-    // Execute via execvp (POSIX) or CreateProcessW (Windows)
-    // Simplified: use system() for CLI fallback (not production-ready)
-    std::ostringstream cmd;
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i) cmd << ' ';
-        cmd << args[i];
+    // Execute via execvp (POSIX) - no shell injection
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(argv[0], argv.data());
+        _exit(127);
+    } else if (pid > 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return dest;
     }
-    int rc = std::system(cmd.str().c_str());
-    if (rc == 0) return dest;
     return std::nullopt;
-#endif
 }
 
 } // namespace rawimport::infrastructure

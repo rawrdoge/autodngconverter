@@ -12,12 +12,8 @@ namespace rawimport::infrastructure {
 EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
 
 std::string EnvConfigProvider::resolve_key(const std::string& key) const {
-    // First check for prefixed key (new format)
-    std::string prefixed = prefix_ + key;
-    if (std::getenv(prefixed.c_str())) return prefixed;
-    // Fall back to unprefixed key (legacy format, e.g., OUTPUT_DIR, WATCH_DIR)
-    if (std::getenv(key.c_str())) return key;
-    return prefixed; // return prefixed for consistent error messages
+    // Only accept RAWIMPORT_ prefixed keys. Legacy unprefixed keys are not supported.
+    return prefix_ + key;
 }
 
 std::optional<std::string> EnvConfigProvider::get_string(const std::string& key) {
@@ -69,15 +65,8 @@ std::map<std::string, std::string> EnvConfigProvider::to_map() {
 }
 
 domain::ValidationReport EnvConfigProvider::validate(const std::vector<domain::RequiredConfigKey>& required) {
-    domain::ValidationReport report;
-    for (const auto& rk : required) {
-        auto v = get_string(rk.name);
-        if (!v || v->empty()) {
-            report.missing_keys.push_back(rk.name);
-        }
-    }
-    report.valid = report.missing_keys.empty();
-    return report;
+    // Use domain-level validation with the prefixed map from to_map()
+    return domain::validate_config(to_map());
 }
 
 } // namespace rawimport::infrastructure

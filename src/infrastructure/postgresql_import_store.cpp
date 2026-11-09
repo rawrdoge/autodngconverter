@@ -50,7 +50,7 @@ std::string timestamp_now() {
 
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
-    if (!values || nfields < 21) return r;
+    if (!values || nfields < 22) return r;
     r.sequence_id      = values[1] ? std::atoll(values[1]) : -1;  // sequence_id is column 2
     r.source_path.native = values[2] ? values[2] : "";
     // source_hash is column 4 (index 3)
@@ -62,16 +62,23 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
         }
     }
     r.output_path.native = values[4] ? values[4] : "";
-    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
-                                   : domain::ImportStatus::Queued;  // status is column 13
-    r.error_message    = values[15] ? values[15] : "";  // error_message is column 16
-    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
-    if (values[18]) r.source_fingerprint.size_bytes = std::atoll(values[18]);
-    if (values[19]) {
-        auto secs = std::atoll(values[19]);
+    // output_hash is column 5 (index 4)
+    if (values[4] && strlen(values[4]) == 64) {
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {values[4][i*2], values[4][i*2+1], 0};
+            r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
+    }
+    r.status           = values[13] ? static_cast<domain::ImportStatus>(std::atoi(values[13]))
+                                   : domain::ImportStatus::Queued;  // status is column 14
+    r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
+    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
+    if (values[19]) r.source_fingerprint.size_bytes = std::atoll(values[19]);
+    if (values[20]) {
+        auto secs = std::atoll(values[20]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (values[20]) r.source_fingerprint.fnv1a = std::atoll(values[20]);
+    if (values[21]) r.source_fingerprint.fnv1a = std::atoll(values[21]);
     r.created_at       = domain::now();
     r.started_at       = domain::now();
     r.completed_at     = domain::now();
@@ -106,14 +113,16 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    std::string hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, status, error_message,"
+    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime_epoch, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
            << " VALUES ('" << pg_escape(conn, rec.source_path.native) << "',"
-           << "'" << hash_hex << "',"
+           << "'" << source_hash_hex << "',"
            << "'" << pg_escape(conn, rec.output_path.native) << "',"
+           << "'" << output_hash_hex << "',"
            << static_cast<int>(rec.status) << ","
            << "'" << pg_escape(conn, rec.error_message) << "',"
            << rec.source_fingerprint.size_bytes << ","
@@ -182,15 +191,15 @@ bool PostgresqlImportStore::update_import(domain::ImportRecord rec) {
     std::string status_str = std::to_string(static_cast<int>(rec.status));
     std::string error_str = pg_escape(conn, rec.error_message);
     std::string output_str = pg_escape(conn, rec.output_path.native);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::string completed_str = timestamp_now();
     std::string id_str = std::to_string(rec.sequence_id);
 
-    const char* params[5] = {status_str.c_str(), error_str.c_str(), output_str.c_str(), completed_str.c_str(), id_str.c_str()};
+    const char* params[6] = {status_str.c_str(), error_str.c_str(), output_str.c_str(), output_hash_hex.c_str(), completed_str.c_str(), id_str.c_str()};
 
     PGresult* res = PQexecParams(conn,
-        "UPDATE imports SET status=$1, error_message=$2, output_path=$3,"
-        " completed_at=$4 WHERE sequence_id=$5",
-        5, nullptr, params, nullptr, nullptr, 0);
+        "UPDATE imports SET status=$1, error_message=$2, output_path=$3, output_hash=$4, completed_at=$5 WHERE sequence_id=$6",
+        6, nullptr, params, nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     PQclear(res); drop_(conn);
     return ok;
@@ -314,7 +323,8 @@ std::vector<domain::Alert> PostgresqlImportStore::list_alerts(std::optional<int6
 std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    // Use pg_try_advisory_lock for brief coordination during lock record creation.
+    // Use pg_try_advisory_lock for coordination during lock record creation.
+    // The advisory lock is session-scoped and will be held until release_lock is called.
     int lock_arg = static_cast<int>(import_id & 0x7FFFFFFF);
     std::string lock_arg_str = std::to_string(lock_arg);
     const char* params1[1] = {lock_arg_str.c_str()};
@@ -345,11 +355,7 @@ std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, co
     if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
         lock_id = std::atoll(PQgetvalue(res, 0, 0));
     PQclear(res);
-    // Release the advisory lock - the lock record in the table persists.
-    res = PQexecParams(conn,
-        "SELECT pg_advisory_unlock($1)", 1,
-        nullptr, params1, nullptr, nullptr, 0);
-    PQclear(res);
+    // Keep the advisory lock until release_lock is called.
     drop_(conn);
     return lock_id;
 }
@@ -384,8 +390,7 @@ bool PostgresqlImportStore::release_lock(int64_t lock_id) {
     res = PQexecParams(conn,
         "UPDATE locks SET released_at=NOW() WHERE id=$1 AND released_at IS NULL",
         1, nullptr,
-        reinterpret_cast<const char* const*>(&lock_id),
-        nullptr, nullptr, 0);
+        params_lock, nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     PQclear(res); drop_(conn);
     return ok;
@@ -394,11 +399,12 @@ bool PostgresqlImportStore::release_lock(int64_t lock_id) {
 bool PostgresqlImportStore::is_locked(int64_t import_id) {
     auto conn = connect_();
     if (!conn) return false;
+    std::string import_id_str = std::to_string(import_id);
+    const char* params[1] = {import_id_str.c_str()};
     PGresult* res = PQexecParams(conn,
         "SELECT COUNT(*) FROM locks WHERE import_id=$1 AND released_at IS NULL",
         1, nullptr,
-        reinterpret_cast<const char* const*>(&import_id),
-        nullptr, nullptr, 0);
+        params, nullptr, nullptr, 0);
     bool locked = (PQresultStatus(res) == PGRES_TUPLES_OK &&
                    PQgetvalue(res, 0, 0)[0] != '0');
     PQclear(res); drop_(conn);
@@ -641,7 +647,7 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
         cols << "\"" << columns[i] << "\"";
     }
 
-    // Build multi-row INSERT with parameterized values to avoid escaping issues
+    // Build multi-row INSERT with properly quoted values
     std::ostringstream sql;
     sql << "INSERT INTO \"" << table << "\" (" << cols.str() << ") VALUES ";
 
@@ -650,7 +656,13 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
         sql << "(";
         for (size_t c = 0; c < columns.size(); ++c) {
             if (c) sql << ", ";
-            sql << pg_escape(conn, values[r][c]);
+            std::string val = values[r][c];
+            // Empty string -> NULL, otherwise quote the escaped value
+            if (val.empty()) {
+                sql << "NULL";
+            } else {
+                sql << "'" << pg_escape(conn, val) << "'";
+            }
         }
         sql << ")";
     }

@@ -89,7 +89,7 @@ private:
     void drop_(MariadbHandle conn) const;
 
     // Helper: escape string for SQL.
-    static std::string sql_escape(const std::string& s);
+    std::string sql_escape(MariadbHandle conn, const std::string& s) const;
 };
 
 } // namespace rawimport::infrastructure

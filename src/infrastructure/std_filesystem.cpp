@@ -83,25 +83,19 @@ std::optional<domain::SHA256Hash> StdFileSystem::sha256_file(const domain::FileP
         if (errno_out) *errno_out = errno;
         return std::nullopt;
     }
+
+    auto hasher = hash_svc_.create_sha256_hasher();
     std::vector<uint8_t> buf(65536);
-    std::vector<uint8_t> all;
-    // Stream directly to hash service if it supports incremental hashing,
-    // otherwise buffer in chunks (current HashService API requires single span).
-    // For now, hash in chunks to avoid loading entire file into memory.
-    std::string hex_result;
-    bool first_chunk = true;
     while (f.read(reinterpret_cast<char*>(buf.data()), buf.size())) {
         auto chunk_span = std::span<const uint8_t>(buf.data(), f.gcount());
-        auto hash = hash_svc_.sha256_bytes(chunk_span);
-        // Note: This hashes each chunk independently, not the full file.
-        // A proper fix would require HashService to support incremental hashing.
-        // For now, fall back to buffering but in 64KB chunks to limit memory.
-        all.insert(all.end(), buf.data(), buf.data() + f.gcount());
+        hasher->update(chunk_span);
     }
     // Append any remaining bytes
-    if (f.gcount() > 0)
-        all.insert(all.end(), buf.data(), buf.data() + f.gcount());
-    return hash_svc_.sha256_bytes(std::span<const uint8_t>(all.data(), all.size()));
+    if (f.gcount() > 0) {
+        auto chunk_span = std::span<const uint8_t>(buf.data(), f.gcount());
+        hasher->update(chunk_span);
+    }
+    return hasher->finalize();
 }
 
 domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::FilePath& path) {
@@ -111,14 +105,22 @@ domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::Fi
 
     fp.size_bytes = static_cast<uint64_t>(std::filesystem::file_size(p));
     // Convert filesystem::file_time_type to system_clock::time_point portably.
-    // file_time_type may have a different epoch (e.g., Windows FILETIME).
-    // Use std::chrono::clock_cast (C++20) if available, otherwise approximate.
+    // On Linux/macOS, file_time_type uses the same epoch as system_clock (Unix epoch).
+    // On Windows, it uses FILETIME (1601 epoch). Use std::chrono::clock_cast (C++20)
+    // when available, otherwise use a portable approximation.
     const auto wt = std::filesystem::last_write_time(p);
 #if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
-    // C++20 clock_cast for portable conversion
-    fp.mtime = std::chrono::clock_cast<std::chrono::system_clock>(wt);
+    // C++20 clock_cast for portable conversion (available on GCC 11+, Clang 12+, MSVC 19.28+)
+    try {
+        fp.mtime = std::chrono::clock_cast<std::chrono::system_clock>(wt);
+    } catch (...) {
+        // Fallback for platforms where clock_cast is not fully implemented
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                              wt.time_since_epoch()).count();
+        fp.mtime = std::chrono::system_clock::from_time_t(secs);
+    }
 #else
-    // Fallback: assume file_time_type uses same epoch as system_clock (Unix).
+    // Pre-C++20 or platforms without clock_cast: assume Unix epoch (Linux/macOS).
     // This is correct on Linux/macOS but not on Windows.
     const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
                           wt.time_since_epoch()).count();
