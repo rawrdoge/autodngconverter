@@ -1,5 +1,0 @@
-domain_types_tests 1 0.00262431
-port_interface_tests 1 0.00216319
-infra_tests 1 0.00260277
-converter_factory_tests 1 0.00251099
----

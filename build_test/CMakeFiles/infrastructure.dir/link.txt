@@ -1,2 +1,0 @@
-/usr/bin/ar qc libinfrastructure.a CMakeFiles/infrastructure.dir/src/infrastructure/std_filesystem.cpp.o CMakeFiles/infrastructure.dir/src/infrastructure/env_config_provider.cpp.o CMakeFiles/infrastructure.dir/src/infrastructure/prometheus_metrics_sink.cpp.o CMakeFiles/infrastructure.dir/src/infrastructure/adobe_dng_converter_engine.cpp.o
-/usr/bin/ranlib libinfrastructure.a
