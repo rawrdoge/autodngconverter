@@ -283,41 +283,69 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    // Check for existing active lock for this import_id (exclusive check)
-    std::string import_id_str = std::to_string(import_id);
-    std::ostringstream check_sql;
-    check_sql << "SELECT id FROM `locks` WHERE import_id=" << import_id_str << " AND released_at IS NULL FOR UPDATE";
+    // Start transaction for atomic lock acquisition.
+    if (mariadb_query(conn, "START TRANSACTION") != 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
 
+    std::string import_id_str = std::to_string(import_id);
+
+    // 1. Clean up expired locks for this import_id (mark as released).
+    std::ostringstream cleanup_sql;
+    cleanup_sql << "UPDATE `locks` SET released_at=NOW() "
+                << "WHERE import_id=" << import_id_str
+                << " AND released_at IS NULL"
+                << " AND expires_at < NOW()";
+    if (mariadb_query(conn, cleanup_sql.str().c_str()) != 0) {
+        mariadb_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
+
+    // 2. Check for any active (non-expired, non-released) lock.
+    std::ostringstream check_sql;
+    check_sql << "SELECT id FROM `locks` "
+              << "WHERE import_id=" << import_id_str
+              << " AND released_at IS NULL"
+              << " AND expires_at >= NOW()"
+              << " FOR UPDATE";
     if (mariadb_query(conn, check_sql.str().c_str()) != 0) {
+        mariadb_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
     MARIADB_RES* res = mariadb_store_result(conn);
     if (res && mariadb_num_rows(res) > 0) {
         mariadb_result_free(res);
+        mariadb_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;  // Active lock already exists
     }
     mariadb_result_free(res);
 
-    // Insert lock record with expiration (1 hour from now).
+    // 3. Insert new lock with proper expiry (1 hour from now).
     std::string holder_str = sql_escape(conn, holder);
-    std::string acquired_str = timestamp_now(); // in production use NOW()
-    // expires_at = acquired_at + 1 hour (3600 seconds) - simplified
-    std::string expires_str = timestamp_now(); // simplified - in production add interval
+    std::ostringstream insert_sql;
+    insert_sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
+               << import_id_str << ", "
+               << holder_str << ", "
+               << "NOW(), "
+               << "DATE_ADD(NOW(), INTERVAL 1 HOUR))";
 
-    std::ostringstream sql;
-    sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
-        << import_id_str << ", "
-        << holder_str << ", "
-        << "'" << acquired_str << "', "
-        << "'" << expires_str << "')";
-
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mariadb_query(conn, insert_sql.str().c_str()) != 0) {
+        mariadb_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
     int64_t lock_id = static_cast<int64_t>(mariadb_insert_id(conn));
+
+    // Commit transaction.
+    if (mariadb_query(conn, "COMMIT") != 0) {
+        mariadb_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
     drop_(conn);
     return lock_id;
 }
