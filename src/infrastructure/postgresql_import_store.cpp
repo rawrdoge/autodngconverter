@@ -50,7 +50,7 @@ std::string timestamp_now() {
 
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
-    if (!values || nfields < 22) return r;
+    if (!values || nfields < 21) return r;
     r.sequence_id      = values[1] ? std::atoll(values[1]) : -1;  // sequence_id is column 2
     r.source_path.native = values[2] ? values[2] : "";
     // source_hash is column 4 (index 3)
@@ -62,23 +62,23 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
         }
     }
     r.output_path.native = values[4] ? values[4] : "";
-    // output_hash is column 5 (index 4)
-    if (values[4] && strlen(values[4]) == 64) {
+    // output_hash is column 6 (index 5)
+    if (values[5] && strlen(values[5]) == 64) {
         for (int i = 0; i < 32; ++i) {
-            char byte_str[3] = {values[4][i*2], values[4][i*2+1], 0};
+            char byte_str[3] = {values[5][i*2], values[5][i*2+1], 0};
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = values[13] ? static_cast<domain::ImportStatus>(std::atoi(values[13]))
-                                   : domain::ImportStatus::Queued;  // status is column 14
-    r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
-    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
-    if (values[19]) r.source_fingerprint.size_bytes = std::atoll(values[19]);
-    if (values[20]) {
-        auto secs = std::atoll(values[20]);
+    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
+                                   : domain::ImportStatus::Queued;  // status is column 13
+    r.error_message    = values[15] ? values[15] : "";  // error_message is column 16
+    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
+    if (values[18]) r.source_fingerprint.size_bytes = std::atoll(values[18]);
+    if (values[19]) {
+        auto secs = std::atoll(values[19]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (values[21]) r.source_fingerprint.fnv1a = std::atoll(values[21]);
+    if (values[20]) r.source_fingerprint.fnv1a = std::atoll(values[20]);
     r.created_at       = domain::now();
     r.started_at       = domain::now();
     r.completed_at     = domain::now();

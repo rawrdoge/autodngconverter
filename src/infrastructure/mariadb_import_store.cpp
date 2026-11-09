@@ -46,7 +46,7 @@ std::string timestamp_to_iso(timeval tv) {
 // Parse IMPORTS row into ImportRecord.
 domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
-    if (!row || ncols < 22) return r;
+    if (!row || ncols < 21) return r;
     r.sequence_id      = atoll(row[1]);  // sequence_id is column 2
     r.source_path.native = row[2] ? row[2] : "";
     // source_hash is column 4 (index 3)
@@ -57,22 +57,22 @@ domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
         }
     }
     r.output_path.native = row[4] ? row[4] : "";
-    // output_hash is column 5 (index 4)
-    if (row[4] && strlen(row[4]) == 64) {
+    // output_hash is column 6 (index 5)
+    if (row[5] && strlen(row[5]) == 64) {
         for (int i = 0; i < 32; ++i) {
-            char byte_str[3] = {row[4][i*2], row[4][i*2+1], 0};
+            char byte_str[3] = {row[5][i*2], row[5][i*2+1], 0};
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = static_cast<domain::ImportStatus>(row[13] ? std::atoi(row[13]) : 0);  // status is column 14
-    r.error_message    = row[16] ? row[16] : "";  // error_message is column 17
-    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
-    if (row[19]) r.source_fingerprint.size_bytes = atoll(row[19]);
-    if (row[20]) {
-        auto secs = atoll(row[20]);
+    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
+    r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
+    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
+    if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
+    if (row[19]) {
+        auto secs = atoll(row[19]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (row[21]) r.source_fingerprint.fnv1a = atoll(row[21]);
+    if (row[20]) r.source_fingerprint.fnv1a = atoll(row[20]);
     r.created_at       = domain::now();
     r.started_at       = domain::now();
     r.completed_at     = domain::now();
@@ -282,9 +282,25 @@ std::vector<domain::Alert> MariadbImportStore::list_alerts(std::optional<int64_t
 std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    
-    // Insert lock record with expiration (1 hour from now).
+
+    // Check for existing active lock for this import_id (exclusive check)
     std::string import_id_str = std::to_string(import_id);
+    std::ostringstream check_sql;
+    check_sql << "SELECT id FROM `locks` WHERE import_id=" << import_id_str << " AND released_at IS NULL FOR UPDATE";
+
+    if (mariadb_query(conn, check_sql.str().c_str()) != 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+    MARIADB_RES* res = mariadb_store_result(conn);
+    if (res && mariadb_num_rows(res) > 0) {
+        mariadb_result_free(res);
+        drop_(conn);
+        return std::nullopt;  // Active lock already exists
+    }
+    mariadb_result_free(res);
+
+    // Insert lock record with expiration (1 hour from now).
     std::string holder_str = sql_escape(conn, holder);
     std::string acquired_str = timestamp_now(); // in production use NOW()
     // expires_at = acquired_at + 1 hour (3600 seconds) - simplified

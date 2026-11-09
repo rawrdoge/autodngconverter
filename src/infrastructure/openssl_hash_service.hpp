@@ -25,7 +25,7 @@ public:
     domain::SHA256Hash finalize() override;
 
 private:
-    EVP_MD_CTX* ctx_;
+    evp_md_ctx_st* ctx_;
 };
 
 class OpenSSLHashService final : public domain::HashService {
