@@ -65,16 +65,20 @@ int exec_cmd(const std::vector<std::string>& args) {
 #ifdef _WIN32
     // Build quoted UTF-16 command line for CreateProcessW.
     // Source args are UTF-8 strings; widen via CP_UTF8 so multibyte paths
-    // (Cyrillic, CJK, etc.) survive intact.
+    // (Cyrillic, CJK, etc.) survive intact. MultiByteToWideChar with -1
+    // includes a trailing null — resized out afterwards so wcmd stays clean.
     int wlen = MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, nullptr, 0);
     std::wstring wcmd(wlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, &wcmd[0], wlen);
+    wcmd.resize(wlen - 1);
     for (size_t i = 1; i < args.size(); ++i) {
         wcmd += L' ';
-        const char* src = quote_cmdline_arg_win(args[i].c_str()).c_str();
+        const std::string quoted = quote_cmdline_arg_win(args[i].c_str());
+        const char* src = quoted.c_str();
         wlen = MultiByteToWideChar(CP_UTF8, 0, src, -1, nullptr, 0);
         std::wstring part(wlen, L'\0');
         MultiByteToWideChar(CP_UTF8, 0, src, -1, &part[0], wlen);
+        part.resize(wlen - 1);
         wcmd += part;
     }
     STARTUPINFOW si{}; si.cb = sizeof(si);
