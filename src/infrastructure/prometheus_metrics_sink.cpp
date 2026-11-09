@@ -11,9 +11,30 @@ namespace rawimport::infrastructure {
 
 PrometheusMetricsSink::PrometheusMetricsSink() = default;
 
+static std::string prometheus_escape(const std::string& v) {
+    std::string out;
+    out.reserve(v.size() + 4);
+    for (char c : v) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '"') out += "\\\"";
+        else out += c;
+    }
+    return out;
+}
+
+static std::string make_key_str(const std::map<std::string, std::string>& labels) {
+    std::string s;
+    for (const auto& [k, v] : labels) {
+        if (!s.empty()) s += ",";
+        s += k + "=" + v;
+    }
+    return s;
+}
+
 CounterEntry& PrometheusMetricsSink::get_counter(
     const std::string& name, const std::map<std::string, std::string>& labels) {
-    const std::string key = name + make_label_str(labels);
+    const std::string key = name + "{" + make_key_str(labels) + "}";
     auto it = counters_.find(key);
     if (it != counters_.end()) return *it->second;
     auto e = std::make_unique<CounterEntry>();
@@ -26,7 +47,7 @@ CounterEntry& PrometheusMetricsSink::get_counter(
 
 HistogramEntry& PrometheusMetricsSink::get_histogram(
     const std::string& name, const std::map<std::string, std::string>& labels) {
-    const std::string key = name + make_label_str(labels);
+    const std::string key = name + "{" + make_key_str(labels) + "}";
     auto it = histograms_.find(key);
     if (it != histograms_.end()) return *it->second;
     auto e = std::make_unique<HistogramEntry>();
@@ -41,7 +62,7 @@ std::string PrometheusMetricsSink::make_label_str(const std::map<std::string, st
     std::string s;
     for (const auto& [k, v] : labels) {
         if (!s.empty()) s += ",";
-        s += k + "=\"" + v + "\"";
+        s += k + "=\"" + prometheus_escape(v) + "\"";
     }
     return s;
 }
