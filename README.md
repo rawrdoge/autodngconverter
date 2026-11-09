@@ -40,7 +40,7 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 | `RAWIMPORT_DB_DRIVER` | `postgresql` | Database backend (`postgresql`, `mariadb`) |
 | `RAWIMPORT_DB_CONNECTION` / `RAWIMPORT_DATABASE_URL` | — | Database connection string DSN |
 | `RAWIMPORT_DB_SSLMODE` | `disable` | TLS mode |
-| `RAWIMPORT_WATCH_DIR` / `RAWIMPORT_OUTPUT_DIR` / `RAWIMPORT_ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
+| `RAWIMPORT_INPUT_DIR` / `RAWIMPORT_OUTPUT_DIR` / `RAWIMPORT_ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
 | `RAWIMPORT_FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
 | `RAWIMPORT_FILE_PATTERN` | `IMG_{seq}` | Output filename |
 | `RAWIMPORT_CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`) |

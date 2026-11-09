@@ -7,9 +7,9 @@ services:
     restart: unless-stopped
     environment:
       - RAWIMPORT_DB_DRIVER=${RAWIMPORT_DB_DRIVER:-postgresql}
-      - RAWIMPORT_DB_CONNECTION=${RAWIMPORT_DB_CONNECTION:-postgresql://rawimport:${DB_PASSWORD}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-rawimport}}
+      - RAWIMPORT_DB_CONNECTION=${RAWIMPORT_DB_CONNECTION:-postgresql://rawimport:***@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-rawimport}}
       - RAWIMPORT_DB_SSLMODE=${RAWIMPORT_DB_SSLMODE:-disable}
-      - RAWIMPORT_WATCH_DIR=/watch
+      - RAWIMPORT_INPUT_DIR=/watch
       - RAWIMPORT_OUTPUT_DIR=/output
       - RAWIMPORT_ARCHIVE_DIR=/archive
       - RAWIMPORT_CONVERTER_ENGINE=${RAWIMPORT_CONVERTER_ENGINE:-dnglab}
