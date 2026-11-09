@@ -686,6 +686,47 @@ int PostgresqlImportStore::expire_stale_locks(int64_t max_age_seconds) {
     return affected;
 }
 
+int64_t PostgresqlImportStore::count_active_locks() {
+    // Determine which lock table exists on this database, then count active rows.
+    auto conn = connect_();
+    if (!conn) return -1;
+
+    PGresult* res = PQexec(conn,
+        "SELECT CASE "
+        " WHEN EXISTS (SELECT 1 FROM information_schema.tables "
+        "              WHERE table_name='locks' AND table_schema='public') "
+        "   THEN 'locks' "
+        " WHEN EXISTS (SELECT 1 FROM information_schema.tables "
+        "              WHERE table_name='processing_locks' AND table_schema='public') "
+        "   THEN 'processing_locks' "
+        " ELSE '' END AS tname");
+    if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        PQclear(res);
+        drop_(conn);
+        return 0;
+    }
+    std::string tbl(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    if (tbl.empty()) {
+        drop_(conn);
+        return 0;
+    }
+
+    std::ostringstream sql;
+    if (tbl == "locks")
+        sql << "SELECT COUNT(*) FROM \"locks\" WHERE released_at IS NULL";
+    else
+        sql << "SELECT COUNT(*) FROM \"processing_locks\"";
+
+    res = PQexec(conn, sql.str().c_str());
+    int64_t count = -1;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
+        count = std::atoll(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    drop_(conn);
+    return count;
+}
+
 } // namespace rawimport::infrastructure
 
 #endif // WITH_POSTGRESQL

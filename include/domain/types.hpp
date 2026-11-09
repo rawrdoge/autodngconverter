@@ -181,23 +181,42 @@ struct ValidationReport {
     std::vector<std::string> invalid_values;
 };
 
+inline std::vector<RequiredConfigKey> required_config_keys() {
+    return {
+        {"OUTPUT_DIR",   "Destination directory for converted DNG files"},
+        {"INPUT_DIR",    "Watched directory containing RAW source files"},
+        {"CONVERTER_ENGINE", "Converter engine to use (dnglab | adobe_dng)"},
+    };
+}
+
+// Validate a configuration map against the full set of rules:
+//  - OUTPUT_DIR, INPUT_DIR, CONVERTER_ENGINE are strictly required.
+//  - At least one of DB_CONNECTION or DATABASE_URL must be supplied.
+//  - DB_DRIVER is optional (defaults to "postgresql" at runtime).
+inline ValidationReport validate_config(const std::map<std::string, std::string>& cfg) {
+    ValidationReport report;
+    for (const auto& k : required_config_keys()) {
+        auto it = cfg.find(k.name);
+        if (it == cfg.end() || it->second.empty())
+            report.missing_keys.push_back(k.name);
+    }
+    const auto db_conn = cfg.find("DB_CONNECTION");
+    const auto db_url  = cfg.find("DATABASE_URL");
+    if ((db_conn == cfg.end() || db_conn->second.empty()) &&
+        (db_url  == cfg.end() || db_url->second.empty())) {
+        report.missing_keys.push_back("DB_CONNECTION");
+        report.missing_keys.push_back("DATABASE_URL");
+    }
+    report.valid = report.missing_keys.empty();
+    return report;
+}
+
 // SHA-256 hex encoding utility (used by HashService implementations).
 inline std::string sha256_hex(const SHA256Hash& h) {
     std::ostringstream oss;
     for (auto byte : h)
         oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
     return oss.str();
-}
-
-inline std::vector<RequiredConfigKey> required_config_keys() {
-    return {
-        {"OUTPUT_DIR",   "Destination directory for converted DNG files"},
-        {"INPUT_DIR",    "Watched directory containing RAW source files"},
-        {"CONVERTER_ENGINE", "Converter engine to use (dnglab | adobedng)"},
-        {"DB_CONNECTION",    "Database connection string (libpq/MariaDB format)"},
-        {"DATABASE_URL",     "Alternative database connection string"},
-        {"DB_DRIVER",        "Database driver: postgresql | mariadb"},
-    };
 }
 
 } // namespace rawimport::domain

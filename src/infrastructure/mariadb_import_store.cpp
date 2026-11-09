@@ -379,13 +379,6 @@ bool MariadbImportStore::init_schema() {
         ") ENGINE=InnoDB",
         "CREATE INDEX IF NOT EXISTS `idx_preview_edits_import_id` ON `preview_edits`(`import_id`)",
         "CREATE INDEX IF NOT EXISTS `idx_preview_edits_edited_at` ON `preview_edits`(`edited_at`)",
-        // foreign keys
-        "ALTER TABLE `imports` ADD CONSTRAINT `fk_imports_sequence` "
-        "FOREIGN KEY (`sequence_id`) REFERENCES `sequences`(`id`) ON DELETE RESTRICT",
-        "ALTER TABLE `reconversions` ADD CONSTRAINT `fk_reconversions_import` "
-        "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
-        "ALTER TABLE `preview_edits` ADD CONSTRAINT `fk_preview_edits_import` "
-        "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
     };
 
     for (const char* sql : schema_sql) {
@@ -396,7 +389,54 @@ bool MariadbImportStore::init_schema() {
         }
     }
 
-    drop_(conn);
+    // Guarded foreign-key additions: skip when the named constraint already exists.
+    struct FkEntry {
+        const char* sql;
+        const char* name;
+        const char* tbl;
+    };
+    const FkEntry fks[] = {
+        {"ALTER TABLE `imports` ADD CONSTRAINT `fk_imports_sequence` "
+         "FOREIGN KEY (`sequence_id`) REFERENCES `sequences`(`id`) ON DELETE RESTRICT",
+         "fk_imports_sequence", "imports"},
+        {"ALTER TABLE `reconversions` ADD CONSTRAINT `fk_reconversions_import` "
+         "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
+         "fk_reconversions_import", "reconversions"},
+        {"ALTER TABLE `preview_edits` ADD CONSTRAINT `fk_preview_edits_import` "
+         "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
+         "fk_preview_edits_import", "preview_edits"},
+    };
+    for (const auto& fk : fks) {
+        std::ostringstream chk;
+        chk << "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS "
+            << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << fk.tbl
+            << "' AND CONSTRAINT_NAME = '" << fk.name
+            << "' AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
+        if (mariadb_query(conn, chk.str().c_str()) != 0) {
+            std::cerr << "Schema init check failed: " << mariadb_error(conn) << "\n";
+            drop_(conn);
+            return false;
+        }
+        MARIADB_RES* res = mariadb_store_result(conn);
+        drop_(conn);
+        bool exists = false;
+        if (res) {
+            MARIADB_ROW r = mariadb_fetch_row(res);
+            exists = (r && r[0] && atoll(r[0]) > 0);
+            mariadb_result_free(res);
+        }
+        conn = connect_();
+        if (!conn) return false;
+        if (exists) continue;
+        if (mariadb_query(conn, fk.sql) != 0) {
+            std::cerr << "Schema init FK failed: " << mariadb_error(conn)
+                      << " (SQL: " << fk.sql << ")\n";
+            drop_(conn);
+            return false;
+        }
+        drop_(conn);
+    }
+
     return true;
 }
 
@@ -567,6 +607,49 @@ int MariadbImportStore::expire_stale_locks(int64_t max_age_seconds) {
     }
     drop_(conn);
     return affected;
+}
+
+int64_t MariadbImportStore::count_active_locks() {
+    // Detect which lock table exists, then count active rows.
+    auto conn = connect_();
+    if (!conn) return -1;
+
+    MARIADB_RES* res = nullptr;
+    std::string tbl;
+    if (mariadb_query(conn,
+        "SELECT TABLE_NAME FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('locks','processing_locks') "
+        "ORDER BY FIELD(TABLE_NAME,'locks','processing_locks') LIMIT 1") != 0) {
+        drop_(conn);
+        return -1;
+    }
+    res = mariadb_store_result(conn);
+    drop_(conn);
+    MARIADB_ROW r;
+    while ((r = mariadb_fetch_row(res))) {
+        if (r[0]) tbl = r[0];
+    }
+    mariadb_result_free(res);
+    if (tbl.empty()) return 0;
+
+    conn = connect_();
+    if (!conn) return -1;
+    std::ostringstream sql;
+    if (tbl == "locks")
+        sql << "SELECT COUNT(*) FROM `locks` WHERE released_at IS NULL";
+    else
+        sql << "SELECT COUNT(*) FROM `processing_locks`";
+    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+        drop_(conn);
+        return -1;
+    }
+    res = mariadb_store_result(conn);
+    drop_(conn);
+    if (!res) return -1;
+    r = mariadb_fetch_row(res);
+    int64_t count = (r && r[0]) ? atoll(r[0]) : -1;
+    mariadb_result_free(res);
+    return count;
 }
 
 } // namespace rawimport::infrastructure

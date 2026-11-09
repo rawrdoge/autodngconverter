@@ -56,7 +56,7 @@ std::map<std::string, std::string> EnvConfigProvider::to_map() {
     // getenv doesn't enumerate, so we expose known keys.
     const std::vector<std::string> known = {
         "OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
-        "DB_CONNECTION", "DATABASE_URL",
+        "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER",
         "LOG_LEVEL", "MAX_WORKERS",
         "IMMICH_BASE_URL", "IMMICH_API_KEY",
         "EXIFTOOL_PATH", "DNGLAB_PATH", "ADOBE_DNG_PATH",

@@ -189,8 +189,8 @@ int run_application(int argc, char** argv) {
     // ─── Config Provider ───────────────────────────────────────────────────────
     auto config = std::make_shared<EnvConfigProvider>("RAWIMPORT_");
 
-    // Validate required config
-    auto validate_result = config->validate(required_config_keys());
+    // Validate required config (domain-level rules: at least one of DB_CONNECTION/DATABASE_URL).
+    auto validate_result = domain::validate_config(config->to_map());
     if (!validate_result.valid) {
         std::cerr << "Config validation failed. Missing keys: ";
         for (const auto& k : validate_result.missing_keys) {

@@ -72,6 +72,7 @@ enum class MigrationStatus : uint8_t {
     FailedConnectTarget,
     FailedSchemaCreate,
     FailedDrainLocks,
+    FailedReadSource,
     FailedCountVerify,
     FailedSequencePreserve,
     TargetNotEmpty,

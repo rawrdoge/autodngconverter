@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdomain.a CMakeFiles/domain.dir/src/domain/types.cpp.o CMakeFiles/domain.dir/src/domain/use_cases.cpp.o
+/usr/bin/ranlib libdomain.a

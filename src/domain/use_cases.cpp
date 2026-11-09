@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <set>
 
 namespace rawimport::use_cases {
@@ -254,8 +255,13 @@ StatsSnapshot Stats::compute() {
 ConfigValidate::ConfigValidate(domain::ConfigProvider& cfg) : cfg_(cfg) {}
 
 domain::ValidationReport ConfigValidate::execute() {
-    auto report = cfg_.validate(domain::required_config_keys());
-    return report;
+    std::map<std::string, std::string> cfg;
+    for (const auto& k : {"OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
+                           "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER"}) {
+        auto v = cfg_.get_string(k);
+        if (v) cfg[k] = *v;
+    }
+    return domain::validate_config(cfg);
 }
 
 } // namespace rawimport::use_cases

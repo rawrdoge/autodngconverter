@@ -58,7 +58,7 @@ public:
     virtual std::vector<std::map<std::string, std::string>>
         list_migration_rows(const std::string& table,
                             const std::vector<std::string>& columns) = 0;
-    // Row count for an arbitrary table.
+    // Row count for an arbitrary table. Returns -1 on read error.
     virtual int64_t count_migration_rows(const std::string& table) = 0;
     // Bulk insert rows (values are SQL-safe string representations).
     virtual bool bulk_insert_migration(const std::string& table,
@@ -72,6 +72,10 @@ public:
     virtual bool table_exists(const std::string& table) = 0;
     // Force-expire stale locks older than max_age_seconds ago.
     virtual int expire_stale_locks(int64_t max_age_seconds) = 0;
+    // Count currently held (active) locks on the source database.
+    // Active = unreleased (new schema) or any row (legacy processing_locks).
+    // Returns -1 on read error, 0 when no lock table exists.
+    virtual int64_t count_active_locks() = 0;
 
     // ── Health ────────────────────────────────────────────────────────────────
     virtual HealthReport health_check() = 0;

@@ -73,6 +73,7 @@ public:
     bool execute_migration_sql(const std::string& sql) override;
     bool table_exists(const std::string& table) override;
     int expire_stale_locks(int64_t max_age_seconds) override;
+    int64_t count_active_locks() override;
 
     // ── health ────────────────────────────────────────────────────────────────
     domain::HealthReport health_check() override;
