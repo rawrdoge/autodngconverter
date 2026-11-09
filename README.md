@@ -2,6 +2,8 @@
 
 Containerized RAW→DNG pipeline. Watches a folder, converts camera RAWs (NRW, NEF, CR2, ARW) to DNG via dnglab, assigns global monotonic `IMG_{n}` sequences, records SHA-256 of source/output in PostgreSQL. Darktable Lua plugin re-embeds edited previews and syncs hashes.
 
+A vibecoded personal project, not a hardened product.
+
 ## Quick Start
 
 **1. Provision PostgreSQL 15+** (external; schema is migrated automatically on startup):
