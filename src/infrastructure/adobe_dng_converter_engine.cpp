@@ -63,12 +63,19 @@ int exec_cmd(const std::vector<std::string>& args) {
     if (args.empty()) return -1;
 
 #ifdef _WIN32
-    // Build quoted command line for CreateProcessA (no shell involved — safe from injection).
-    std::wstring wcmd;
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i) wcmd += L' ';
-        std::string q = quote_cmdline_arg_win(args[i].c_str());
-        wcmd.append(q.begin(), q.end());
+    // Build quoted UTF-16 command line for CreateProcessW.
+    // Source args are UTF-8 strings; widen via CP_UTF8 so multibyte paths
+    // (Cyrillic, CJK, etc.) survive intact.
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, nullptr, 0);
+    std::wstring wcmd(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, &wcmd[0], wlen);
+    for (size_t i = 1; i < args.size(); ++i) {
+        wcmd += L' ';
+        const char* src = quote_cmdline_arg_win(args[i].c_str()).c_str();
+        wlen = MultiByteToWideChar(CP_UTF8, 0, src, -1, nullptr, 0);
+        std::wstring part(wlen, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, src, -1, &part[0], wlen);
+        wcmd += part;
     }
     STARTUPINFOW si{}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};

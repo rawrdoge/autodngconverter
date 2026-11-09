@@ -434,7 +434,6 @@ bool MariadbImportStore::init_schema() {
             drop_(conn);
             return false;
         }
-        drop_(conn);
     }
 
     return true;

@@ -718,18 +718,20 @@ MigrationResult MigrationRunner::verify_counts_() {
         }
     }
 
-    // Verify sequence id continuity: no gaps in [1..max_id].
+    // Verify sequence IDs match between source and target (preserve gaps).
+    auto src_seq = source->list_migration_rows("sequences", {"id"});
+    std::vector<int64_t> src_ids, tgt_ids;
+    for (const auto& row : src_seq)
+        src_ids.push_back(std::atoll(row.at("id").c_str()));
+    std::sort(src_ids.begin(), src_ids.end());
     auto seq_rows = target->list_migration_rows("sequences", {"id"});
-    int64_t expected = 1;
-    for (const auto& row : seq_rows) {
-        int64_t id = std::atoll(row.at("id").c_str());
-        if (id != expected) {
-            set_failed_(result, MigrationStatus::FailedSequencePreserve,
-                        "Sequence gap detected in sequences: expected id=" +
-                        std::to_string(expected) + ", found " + std::to_string(id));
-            return result;
-        }
-        ++expected;
+    for (const auto& row : seq_rows)
+        tgt_ids.push_back(std::atoll(row.at("id").c_str()));
+    std::sort(tgt_ids.begin(), tgt_ids.end());
+    if (src_ids != tgt_ids) {
+        set_failed_(result, MigrationStatus::FailedSequencePreserve,
+                    "Sequence ID mismatch between source and target");
+        return result;
     }
 
     return result;
