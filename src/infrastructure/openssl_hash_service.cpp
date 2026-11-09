@@ -26,7 +26,7 @@ domain::SHA256Hash OpenSSLHashService::sha256_bytes(std::span<const uint8_t> dat
 }
 
 uint64_t OpenSSLHashService::fnv1a_64(std::span<const uint8_t> data) {
-    uint64_t h = 1469598103934665603ULL; // FNV-1a 64-bit offset basis
+    uint64_t h = 14695981039346656037ULL; // FNV-1a 64-bit offset basis
     for (auto byte : data) {
         h ^= static_cast<uint64_t>(byte);
         h *= 1099511628211ULL; // FNV-1a 64-bit prime

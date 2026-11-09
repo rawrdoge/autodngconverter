@@ -176,9 +176,19 @@ TEST(reconversion_status_values) {
 
 // ─── FastFingerprint with real data ───────────────────────────────────────────
 TEST(fnv1a_known_input) {
-    FastFingerprint fp{};
-    fp.fnv1a = 1469598103934665603ULL;
-    UTEST_ASSERT_EQ(fp.fnv1a, 1469598103934665603ULL);
+    // FNV-1a 64-bit offset basis is 14695981039346656037 (aka cbf29ce484222325).
+    // The implementation must use this exact value; an off-by-one digit changes
+    // every subsequent hash unexpectedly.
+    static_assert(14695981039346656037ULL == 0xcbf29ce484222325ULL,
+                  "FNV-1a offset basis must equal cbf29ce484222325");
+#if defined(HAVE_OPENSSL)
+    OpenSSLHashService svc;
+    uint64_t empty_hash = svc.fnv1a_64({});
+    UTEST_ASSERT_EQ(empty_hash, 14695981039346656037ULL);
+    std::vector<uint8_t> hello = {'h','e','l','l','o'};
+    uint64_t hello_hash = svc.fnv1a_64(hello);
+    UTEST_ASSERT_EQ(hello_hash, 11831194018420276491ULL);
+#endif
 }
 
 // ─── Lock defaults ────────────────────────────────────────────────────────────

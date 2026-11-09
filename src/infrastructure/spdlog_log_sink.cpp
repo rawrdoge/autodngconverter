@@ -372,7 +372,7 @@ private:
         oss << '{';
         oss << "\"timestamp\":" << json_escape(now_iso8601()) << ',';
         oss << "\"level\":" << json_escape(std::string(level)) << ',';
-        oss << "\"event\":" << json_escape(std::string(event)) << ',';
+        oss << "\"event\":" << json_escape(std::string(event));
 
         // Fields
         bool first = true;
