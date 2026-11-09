@@ -91,6 +91,71 @@ public:
     void LogDbQueryFailed(std::string_view sequence_id,
                           std::string_view error) override;
 
+    // ─── ExifTool Events ───────────────────────────────────────────────────────
+    void LogExifExtractionFailed(std::string_view sequence_id,
+                                 std::string_view source_path,
+                                 std::string_view error,
+                                 bool daemon_restarted) override;
+
+    void LogExifToolDaemonRestarted(std::string_view reason,
+                                     int restart_count) override;
+
+    // ─── Converter Events ──────────────────────────────────────────────────────
+    void LogConverterEngineUnavailable(std::string_view engine_name,
+                                       std::string_view reason) override;
+
+    void LogConverterUnsupportedFormat(std::string_view sequence_id,
+                                       std::string_view source_path,
+                                       std::string_view extension) override;
+
+    // ─── Filesystem Events ─────────────────────────────────────────────────────
+    void LogFilesystemReadError(std::string_view sequence_id,
+                                std::string_view path,
+                                int errno_code,
+                                std::string_view operation) override;
+
+    void LogFilesystemWriteError(std::string_view sequence_id,
+                                 std::string_view path,
+                                 int errno_code,
+                                 std::string_view operation) override;
+
+    void LogFilesystemArchiveFailed(std::string_view sequence_id,
+                                    std::string_view source,
+                                    std::string_view dest,
+                                    std::string_view error) override;
+
+    // ─── Hash Events ───────────────────────────────────────────────────────────
+    void LogHashVerificationFailed(std::string_view sequence_id,
+                                   std::string_view expected_hash,
+                                   std::string_view actual_hash,
+                                   std::string_view stage) override;
+
+    // ─── Reconversion Events ───────────────────────────────────────────────────
+    void LogReconversionLockFailed(std::string_view import_id,
+                                   std::string_view holder,
+                                   int age_seconds) override;
+
+    void LogReconversionSourceMissing(std::string_view import_id,
+                                      std::string_view source_dng_path) override;
+
+    // ─── Rotation Events ───────────────────────────────────────────────────────
+    void LogRotationPushFailed(std::string_view import_id,
+                               std::string_view sink,
+                               std::string_view error) override;
+
+    // ─── Config Events ─────────────────────────────────────────────────────────
+    void LogConfigInvalidValue(std::string_view key,
+                               std::string_view value,
+                               std::string_view reason) override;
+
+    // ─── Watch Events ──────────────────────────────────────────────────────────
+    void LogWatchScanFailed(std::string_view watch_dir,
+                            std::string_view error) override;
+
+    void LogWatchStabilityTimeout(std::string_view sequence_id,
+                                  std::string_view path,
+                                  int checks) override;
+
 private:
     std::string logger_name_;
     class Impl;

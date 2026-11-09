@@ -4,6 +4,7 @@
 #include "domain/use_cases.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <iostream>
 #include <map>
 #include <set>
@@ -29,6 +30,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     // 1. Verify source exists.
     if (!fs_.exists(source)) {
         outcome.error = "Source file not found: " + source.native;
+        log_.LogFilesystemReadError("", source.native, ENOENT, "exists");
         log_.error(outcome.error);
         return outcome;
     }
@@ -37,6 +39,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     auto source_hash_opt = fs_.sha256_file(source);
     if (!source_hash_opt) {
         outcome.error = "Failed to compute source file hash";
+        log_.LogFilesystemReadError("", source.native, EIO, "sha256_file");
         log_.error(outcome.error);
         return outcome;
     }
@@ -112,6 +115,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         auto id_opt = store_.create_import(rec);
         if (!id_opt) {
             outcome.error = "Failed to create import record";
+            log_.LogDbQueryFailed("", "create_import returned null");
             log_.error(outcome.error);
             return outcome;
         }
@@ -126,6 +130,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
             rec.output_path = domain::FilePath{dir + "/IMG_" + std::to_string(rec.sequence_id) + ".dng"};
             if (!store_.update_import(rec)) {
                 outcome.error = "Failed to update import record with output path";
+                log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false");
                 log_.error(outcome.error);
                 return outcome;
             }
@@ -140,7 +145,9 @@ ImportOutcome Import::execute(const domain::FilePath& source,
 
     // 7. Extract EXIF.
     auto exif_opt = extractor_.extract(source);
-    if (exif_opt) {
+    if (!exif_opt) {
+        log_.LogExifExtractionFailed(std::to_string(rec.sequence_id), source.native, "extraction returned empty", false);
+    } else {
         log_.info("EXIF extracted: " + exif_opt->make + " " + exif_opt->model,
                   {{"source", source.native}});
     }
@@ -156,6 +163,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         outcome.error = "Conversion failed";
         metrics_.increment_counter("imports_failed", 1, {{"engine", engine_name(settings.engine)}});
         log_.LogImportFailed(std::to_string(rec.sequence_id), outcome.error);
+        log_.LogConversionFailedEngineError(std::to_string(rec.sequence_id), engine_name(settings.engine), -1, "engine returned null result");
         log_.error(outcome.error, {{"source", source.native}});
         return outcome;
     }
@@ -193,6 +201,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto lock_opt = store_.acquire_lock(import_id, "reconversion");
     if (!lock_opt) {
         outcome.error = "Could not acquire lock for import " + std::to_string(import_id);
+        log_.LogReconversionLockFailed(std::to_string(import_id), "unknown", 0);
         log_.error(outcome.error);
         return outcome;
     }
@@ -201,6 +210,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto imp = store_.get_import(import_id);
     if (!imp) {
         outcome.error = "Import record not found: " + std::to_string(import_id);
+        log_.LogReconversionSourceMissing(std::to_string(import_id), source_dng.native);
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -217,6 +227,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto rec_id = store_.create_reconversion(rec);
     if (!rec_id) {
         outcome.error = "Failed to create reconversion record";
+        log_.LogDbQueryFailed(std::to_string(import_id), "create_reconversion returned null");
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -229,6 +240,8 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
         rec.error_message = "Conversion failed";
         store_.update_reconversion(rec);
         outcome.error = "Reconversion failed";
+        log_.LogImportFailed(std::to_string(import_id), outcome.error);
+        log_.LogConversionFailedEngineError(std::to_string(import_id), engine_name(settings.engine), -1, "engine returned null result");
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -310,6 +323,7 @@ RotationOutcome Rotation::execute(int64_t import_id, int orientation) {
     bool pushed = sink_.push_orientation(import_id, orientation);
     if (!pushed) {
         outcome.error = "Failed to push orientation to rotation sink";
+        log_.LogRotationPushFailed(std::to_string(import_id), "immich", outcome.error);
         log_.error(outcome.error);
         return outcome;
     }
