@@ -106,6 +106,93 @@ public:
     /// Database: query failed
     virtual void LogDbQueryFailed(std::string_view sequence_id,
                                   std::string_view error) = 0;
+
+    // ─── ExifTool Events ───────────────────────────────────────────────────────
+
+    /// ExifTool: metadata extraction failed (crash, timeout, non-zero exit)
+    virtual void LogExifExtractionFailed(std::string_view sequence_id,
+                                         std::string_view source_path,
+                                         std::string_view error,
+                                         bool daemon_restarted) = 0;
+
+    /// ExifTool: daemon restarted (health check fail, crash, OOM)
+    virtual void LogExifToolDaemonRestarted(std::string_view reason,
+                                             int restart_count) = 0;
+
+    // ─── Converter Events ──────────────────────────────────────────────────────
+
+    /// Converter: engine unavailable at startup or first use
+    virtual void LogConverterEngineUnavailable(std::string_view engine_name,
+                                               std::string_view reason) = 0;
+
+    /// Converter: unsupported file format
+    virtual void LogConverterUnsupportedFormat(std::string_view sequence_id,
+                                               std::string_view source_path,
+                                               std::string_view extension) = 0;
+
+    // ─── Filesystem Events ─────────────────────────────────────────────────────
+
+    /// Filesystem: read/stat/open failed
+    virtual void LogFilesystemReadError(std::string_view sequence_id,
+                                        std::string_view path,
+                                        int errno_code,
+                                        std::string_view operation) = 0;
+
+    /// Filesystem: write/rename/mkdir/sync failed
+    virtual void LogFilesystemWriteError(std::string_view sequence_id,
+                                         std::string_view path,
+                                         int errno_code,
+                                         std::string_view operation) = 0;
+
+    /// Filesystem: archive/move to failed/ failed
+    virtual void LogFilesystemArchiveFailed(std::string_view sequence_id,
+                                            std::string_view source,
+                                            std::string_view dest,
+                                            std::string_view error) = 0;
+
+    // ─── Hash Events ───────────────────────────────────────────────────────────
+
+    /// Hash: post-conversion output hash verification failed
+    virtual void LogHashVerificationFailed(std::string_view sequence_id,
+                                           std::string_view expected_hash,
+                                           std::string_view actual_hash,
+                                           std::string_view stage) = 0;
+
+    // ─── Reconversion Events ───────────────────────────────────────────────────
+
+    /// Reconversion: lock acquisition failed
+    virtual void LogReconversionLockFailed(std::string_view import_id,
+                                           std::string_view holder,
+                                           int age_seconds) = 0;
+
+    /// Reconversion: source RAW/DNG missing
+    virtual void LogReconversionSourceMissing(std::string_view import_id,
+                                              std::string_view source_dng_path) = 0;
+
+    // ─── Rotation Events ───────────────────────────────────────────────────────
+
+    /// Rotation: push to downstream sink (Immich, etc.) failed
+    virtual void LogRotationPushFailed(std::string_view import_id,
+                                       std::string_view sink,
+                                       std::string_view error) = 0;
+
+    // ─── Config Events ─────────────────────────────────────────────────────────
+
+    /// Config: runtime validation failure (invalid port, path, DSN)
+    virtual void LogConfigInvalidValue(std::string_view key,
+                                       std::string_view value,
+                                       std::string_view reason) = 0;
+
+    // ─── Watch Events ──────────────────────────────────────────────────────────
+
+    /// Watch: directory scan failed (permission, unmounted)
+    virtual void LogWatchScanFailed(std::string_view watch_dir,
+                                    std::string_view error) = 0;
+
+    /// Watch: file stability timeout (incomplete copy)
+    virtual void LogWatchStabilityTimeout(std::string_view sequence_id,
+                                          std::string_view path,
+                                          int checks) = 0;
 };
 
 } // namespace rawimport::domain

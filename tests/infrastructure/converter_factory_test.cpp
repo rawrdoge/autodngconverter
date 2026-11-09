@@ -83,6 +83,36 @@ public:
     void LogDbDeadlock(std::string_view) override {}
     void LogDbQueryFailed(std::string_view, std::string_view) override {}
 
+    // ─── ExifTool Events ───────────────────────────────────────────────────────
+    void LogExifExtractionFailed(std::string_view, std::string_view, std::string_view, bool) override {}
+    void LogExifToolDaemonRestarted(std::string_view, int) override {}
+
+    // ─── Converter Events ──────────────────────────────────────────────────────
+    void LogConverterEngineUnavailable(std::string_view, std::string_view) override {}
+    void LogConverterUnsupportedFormat(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Filesystem Events ─────────────────────────────────────────────────────
+    void LogFilesystemReadError(std::string_view, std::string_view, int, std::string_view) override {}
+    void LogFilesystemWriteError(std::string_view, std::string_view, int, std::string_view) override {}
+    void LogFilesystemArchiveFailed(std::string_view, std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Hash Events ───────────────────────────────────────────────────────────
+    void LogHashVerificationFailed(std::string_view, std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Reconversion Events ───────────────────────────────────────────────────
+    void LogReconversionLockFailed(std::string_view, std::string_view, int) override {}
+    void LogReconversionSourceMissing(std::string_view, std::string_view) override {}
+
+    // ─── Rotation Events ───────────────────────────────────────────────────────
+    void LogRotationPushFailed(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Config Events ─────────────────────────────────────────────────────────
+    void LogConfigInvalidValue(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Watch Events ──────────────────────────────────────────────────────────
+    void LogWatchScanFailed(std::string_view, std::string_view) override {}
+    void LogWatchStabilityTimeout(std::string_view, std::string_view, int) override {}
+
 private:
     std::string correlation_id_;
 };
