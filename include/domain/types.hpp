@@ -99,7 +99,8 @@ struct ImportRecord {
     FilePath             output_path;
     ImportStatus         status        = ImportStatus::Queued;
     std::string          error_message;
-    FastFingerprint      source_fingerprint;
+    SHA256Hash           source_hash;          // Full SHA256 of source file
+    FastFingerprint      source_fingerprint;   // Size + mtime + FNV-1a of first 4KiB
     Instant              created_at;
     Instant              started_at;
     Instant              completed_at;

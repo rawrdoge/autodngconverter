@@ -7,6 +7,8 @@
 #include <string>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <chrono>
 
 // Domain ports
 #include "domain/ports/config_provider.hpp"
@@ -166,15 +168,31 @@ int run_application(int argc, char** argv) {
                   << (opts.from == migration::SourceDB::MariaDB ? "MariaDB" : "PostgreSQL")
                   << " to "
                   << (opts.to == migration::TargetDB::PostgreSQL ? "PostgreSQL" : "MariaDB") << "\n";
-        std::cout << "Source DSN: " << opts.source_dsn << "\n";
-        std::cout << "Target DSN: " << opts.target_dsn << "\n";
+        auto redact_dsn = [](const std::string& dsn) -> std::string {
+            // Redact password in postgresql://user:pass@host/db or mariadb://user:pass@host/db
+            size_t at_pos = dsn.find('@');
+            size_t colon_pos = dsn.find(':', dsn.find("://") + 3);
+            if (at_pos != std::string::npos && colon_pos != std::string::npos && colon_pos < at_pos) {
+                return dsn.substr(0, colon_pos + 1) + "[REDACTED]" + dsn.substr(at_pos);
+            }
+            return "[REDACTED]";
+        };
+        std::cout << "Source DSN: " << redact_dsn(opts.source_dsn) << "\n";
+        std::cout << "Target DSN: " << redact_dsn(opts.target_dsn) << "\n";
         std::cout << "Dry run: " << (opts.dry_run ? "yes" : "no") << "\n";
         std::cout << "Batch size: " << opts.batch_size << "\n";
 
         migration::MigrationRunner runner(opts);
         auto result = runner.run();
         if (result.status == migration::MigrationStatus::Success) {
-            std::cout << result.message << "\n";
+            if (opts.dry_run) {
+                std::cout << "Dry run completed: " << result.message << "\n";
+                for (const auto& w : result.warnings) {
+                    std::cout << "Would: " << w << "\n";
+                }
+            } else {
+                std::cout << result.message << "\n";
+            }
             return 0;
         } else {
             std::cerr << "Migration failed: " << result.message << "\n";
@@ -339,14 +357,39 @@ int run_application(int argc, char** argv) {
             return 1;
         }
         log->info("Starting watch mode", {{"watch_dir", watch_dir}});
-        // In production, this would run a filesystem watcher loop.
-        // For now, we run a single scan as a demo.
         auto extensions = engine->supported_extensions();
-        auto result = scan_uc.execute(watch_dir, extensions);
-        log->info("Watch scan complete",
-                  {{"new_files", std::to_string(result.new_files.size())},
-                   {"unchanged", std::to_string(result.unchanged_files.size())}});
-        return 0;
+        // Output directory for converted files
+        std::string output_dir = config->get_string("OUTPUT_DIR").value_or("");
+        if (output_dir.empty()) {
+            log->error("OUTPUT_DIR not configured for watch mode");
+            return 1;
+        }
+        // Polling interval (seconds)
+        int poll_interval = config->get_int("WATCH_POLL_INTERVAL").value_or(30);
+        // Run continuous scan/import loop
+        for (;;) {
+            auto result = scan_uc.execute(watch_dir, extensions);
+            log->info("Watch scan complete",
+                      {{"new_files", std::to_string(result.new_files.size())},
+                       {"unchanged", std::to_string(result.unchanged_files.size())}});
+            // Import new files
+            for (const auto& fp : result.new_files) {
+                domain::FilePath dest{output_dir + "/" + fp.filename()};
+                // Replace extension with .dng
+                auto dot = dest.native.find_last_of('.');
+                if (dot != std::string::npos) {
+                    dest.native = dest.native.substr(0, dot) + ".dng";
+                }
+                ConversionSettings settings;
+                auto outcome = import_uc.execute(fp, dest, settings);
+                if (outcome.success) {
+                    log->info("Auto-imported: " + fp.native + " -> " + outcome.record.output_path.native);
+                } else {
+                    log->error("Auto-import failed: " + fp.native + " - " + outcome.error);
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(poll_interval));
+        }
     }
 
     try {
@@ -452,7 +495,12 @@ int run_application(int argc, char** argv) {
             }
             auto cfg_map = config->to_map();
             for (const auto& [k, v] : cfg_map) {
-                std::cout << k << "=" << v << "\n";
+                // Redact sensitive values
+                if (k == "DB_CONNECTION" || k == "DATABASE_URL" || k == "IMMICH_API_KEY") {
+                    std::cout << k << "=[REDACTED]\n";
+                } else {
+                    std::cout << k << "=" << v << "\n";
+                }
             }
             return report.valid ? 0 : 1;
         }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(rawimport_pipeline VERSION 2.3.9 LANGUAGES CXX)
+project(rawimport_pipeline VERSION 2.3.10 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -112,9 +112,9 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   endif()
 
   if(WITH_SPDLOG)
+    find_package(spdlog REQUIRED)
     add_compile_definitions(WITH_SPDLOG)
     list(APPEND INFRA_SOURCES src/infrastructure/spdlog_log_sink.cpp)
-    find_package(spdlog QUIET)
     if(TARGET spdlog::spdlog)
       list(APPEND INFRA_DEPS spdlog::spdlog)
     endif()

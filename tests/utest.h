@@ -24,7 +24,13 @@
 struct utest_registrar_t {
     explicit utest_registrar_t(utest_entry_t *e) { utest_register(e); }
 };
-#elif !defined(__GNUC__) && !defined(__clang__)
+#define UTEST_AUTO_REG(name) static utest_registrar_t utest_auto_reg_##name{&utest_reg_##name}
+#elif defined(__GNUC__) || defined(__clang__)
+#define UTEST_AUTO_REG(name)                                                       \
+    __attribute__((constructor)) static void utest_auto_reg_##name(void) {       \
+        utest_register(&utest_reg_##name);                                       \
+    }
+#else
 #error utest.h: automatic test registration requires GCC/Clang or MSVC (C++ mode).
 #endif
 
@@ -66,14 +72,6 @@ struct utest_registrar_t {
 /* ------------------------------------------------------------------ */
 /* Test registration                                                   */
 /* ------------------------------------------------------------------ */
-#define UTEST_AUTO_REG(name)                                                       \
-    __attribute__((constructor)) static void utest_auto_reg_##name(void) {       \
-        utest_register(&utest_reg_##name);                                       \
-    }
-#if defined(_WIN32) && defined(__cplusplus)
-#undef UTEST_AUTO_REG
-#define UTEST_AUTO_REG(name) static utest_registrar_t utest_auto_reg_##name{&utest_reg_##name}
-#endif
 
 #define TEST(name)                                                               \
     static void utest_fn_##name(void);                                        \

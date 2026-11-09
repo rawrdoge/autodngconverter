@@ -27,6 +27,7 @@ public:
     // ── imports ───────────────────────────────────────────────────────────────
     std::optional<int64_t>   create_import(const domain::ImportRecord& rec) override;
     std::optional<domain::ImportRecord> get_import(int64_t id) override;
+    std::optional<domain::ImportRecord> find_import_by_source_hash(const domain::SHA256Hash& hash) override;
     bool                     update_import(domain::ImportRecord rec) override;
     std::vector<domain::ImportRecord> list_imports(std::optional<domain::ImportStatus> status_filter) override;
 

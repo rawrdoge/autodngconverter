@@ -73,16 +73,53 @@ domain::HealthReport ExiftoolDaemonExifExtractor::health_check() {
 std::optional<domain::ExifResult> ExiftoolDaemonExifExtractor::extract(const domain::FilePath& path) {
     if (!open_daemon()) return std::nullopt;
 
-    fprintf(daemon_stream_, "-j\n-DateTimeOriginal\n-Model\n-Make\n-Orientation\n%s\n"
-                            "-stay_open\nno\n\n",
-            path.native.c_str());
-    fflush(daemon_stream_);
+    // Write the command to extract metadata for the given file.
+    // Use -j for JSON output, -stay_open True to keep daemon alive.
+    std::string cmd = "-j\n" + path.native + "\n-stay_open\nTrue\n\n";
+    if (std::fwrite(cmd.c_str(), 1, cmd.size(), daemon_stream_) != cmd.size()) {
+        close_daemon();
+        return std::nullopt;
+    }
+    std::fflush(daemon_stream_);
+
+    // Read the JSON response from the daemon's stdout.
+    // The daemon writes to the same FILE* when opened with "w" (popen).
+    // We need to read from a separate pipe for stdout. For simplicity,
+    // fall back to single-process mode which is more reliable.
     close_daemon();
 
-    // We cannot read stdout after -stay_open no because we closed it;
-    // instead capture response before closing. Simplified: use separate process.
-    // For correctness, fall back to single-process mode.
-    return std::nullopt;
+    // Single-process fallback: run exiftool once for this file.
+    const auto bin = binary_path_.empty() ? find_in_path("exiftool") : binary_path_;
+    if (bin.empty()) return std::nullopt;
+
+    std::string cmd_single = bin + " -j -DateTimeOriginal -Model -Make -Orientation " +
+                             path.native + " 2>/dev/null";
+    FILE* pipe = popen(cmd_single.c_str(), "r");
+    if (!pipe) return std::nullopt;
+
+    std::string output;
+    char buffer[4096];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        output += buffer;
+    }
+    pclose(pipe);
+
+    if (output.empty()) return std::nullopt;
+
+    // Parse JSON array response (exiftool returns an array with one object).
+    domain::ExifResult result;
+    result.make = extract_json_field(output, "Make");
+    result.model = extract_json_field(output, "Model");
+    result.datetime_original = extract_json_field(output, "DateTimeOriginal");
+    std::string orientation_str = extract_json_field(output, "Orientation");
+    if (!orientation_str.empty()) {
+        try {
+            result.orientation = std::stoi(orientation_str);
+        } catch (...) {
+            result.orientation = 1;
+        }
+    }
+    return result;
 }
 
 } // namespace rawimport::infrastructure

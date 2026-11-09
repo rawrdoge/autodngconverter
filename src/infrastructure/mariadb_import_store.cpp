@@ -46,16 +46,29 @@ std::string timestamp_to_iso(timeval tv) {
 // Parse IMPORTS row into ImportRecord.
 domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
-    if (row && ncols >= 10) {
-        r.sequence_id      = atoll(row[0]);
-        r.source_path.native = row[1] ? row[1] : "";
-        r.output_path.native = row[2] ? row[2] : "";
-        r.status           = static_cast<domain::ImportStatus>(row[3] ? std::atoi(row[3]) : 0);
-        r.error_message    = row[4] ? row[4] : "";
-        r.created_at       = domain::now();
-        r.started_at       = domain::now();
-        r.completed_at     = domain::now();
+    if (!row || ncols < 21) return r;
+    r.sequence_id      = atoll(row[1]);  // sequence_id is column 2
+    r.source_path.native = row[2] ? row[2] : "";
+    // source_hash is column 4 (index 3)
+    if (row[3] && strlen(row[3]) == 64) {
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {row[3][i*2], row[3][i*2+1], 0};
+            r.source_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
     }
+    r.output_path.native = row[4] ? row[4] : "";
+    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
+    r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
+    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
+    if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
+    if (row[19]) {
+        auto secs = atoll(row[19]);
+        r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
+    }
+    if (row[20]) r.source_fingerprint.fnv1a = atoll(row[20]);
+    r.created_at       = domain::now();
+    r.started_at       = domain::now();
+    r.completed_at     = domain::now();
     return r;
 }
 
@@ -90,19 +103,21 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
+    std::string hash_hex = domain::sha256_hex(rec.source_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, output_path, status, error_message,"
+    sql << "INSERT INTO imports (source_path, source_hash, output_path, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
            " VALUES ("
            << sql_escape(rec.source_path.native) << ", "
+           << sql_escape(hash_hex) << ", "
            << sql_escape(rec.output_path.native) << ", "
            << static_cast<int>(rec.status) << ", "
            << sql_escape(rec.error_message) << ", "
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
            << rec.source_fingerprint.fnv1a << ", "
-           << "'"+timestamp_to_iso({0,0})+"', " // simplified timestamp
+           << "'"+timestamp_to_iso({0,0})+"', "
            << "'"+timestamp_to_iso({0,0})+"', "
            << "'"+timestamp_to_iso({0,0})+"'"
            << ")";
@@ -122,6 +137,25 @@ std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
 
     std::ostringstream sql;
     sql << "SELECT * FROM imports WHERE sequence_id=" << id;
+    if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
+
+    MARIADB_RES* res = mariadb_store_result(conn);
+    drop_(conn);
+    if (!res || mariadb_num_rows(res) == 0) { mariadb_result_free(res); return std::nullopt; }
+
+    MARIADB_ROW row = mariadb_fetch_row(res);
+    auto rec = row_to_import(row, mariadb_field_count(res));
+    mariadb_result_free(res);
+    return rec;
+}
+
+std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_hash(const domain::SHA256Hash& hash) {
+    auto conn = connect_();
+    if (!conn) return std::nullopt;
+
+    std::string hash_hex = domain::sha256_hex(hash);
+    std::ostringstream sql;
+    sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(hash_hex) << " LIMIT 1";
     if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MARIADB_RES* res = mariadb_store_result(conn);
@@ -319,7 +353,10 @@ bool MariadbImportStore::init_schema() {
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `error_message` TEXT,"
         "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
-        "    `orientation` TINYINT UNSIGNED NULL COMMENT 'EXIF Orientation 1-8 agreed across apps, NULL means unset'"
+        "    `orientation` TINYINT UNSIGNED NULL COMMENT 'EXIF Orientation 1-8 agreed across apps, NULL means unset',"
+        "    `source_fingerprint_size` BIGINT UNSIGNED,"
+        "    `source_fingerprint_mtime` BIGINT UNSIGNED,"
+        "    `source_fingerprint_fnv1a` BIGINT UNSIGNED"
         ") ENGINE=InnoDB",
         "CREATE INDEX IF NOT EXISTS `idx_imports_source_hash` ON `imports`(`source_hash`)",
         "CREATE INDEX IF NOT EXISTS `idx_imports_output_hash` ON `imports`(`output_hash`)",

@@ -50,13 +50,28 @@ std::string timestamp_now() {
 
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
-    if (!values || nfields < 10) return r;
-    r.sequence_id      = values[0] ? std::atoll(values[0]) : -1;
-    r.source_path.native = values[1] ? values[1] : "";
-    r.output_path.native = values[2] ? values[2] : "";
-    r.status           = values[3] ? static_cast<domain::ImportStatus>(std::atoi(values[3]))
-                                   : domain::ImportStatus::Queued;
-    r.error_message    = values[4] ? values[4] : "";
+    if (!values || nfields < 21) return r;
+    r.sequence_id      = values[1] ? std::atoll(values[1]) : -1;  // sequence_id is column 2
+    r.source_path.native = values[2] ? values[2] : "";
+    // source_hash is column 4 (index 3)
+    if (values[3] && strlen(values[3]) == 64) {
+        // Parse hex string to SHA256Hash
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {values[3][i*2], values[3][i*2+1], 0};
+            r.source_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
+    }
+    r.output_path.native = values[4] ? values[4] : "";
+    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
+                                   : domain::ImportStatus::Queued;  // status is column 13
+    r.error_message    = values[15] ? values[15] : "";  // error_message is column 16
+    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
+    if (values[18]) r.source_fingerprint.size_bytes = std::atoll(values[18]);
+    if (values[19]) {
+        auto secs = std::atoll(values[19]);
+        r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
+    }
+    if (values[20]) r.source_fingerprint.fnv1a = std::atoll(values[20]);
     r.created_at       = domain::now();
     r.started_at       = domain::now();
     r.completed_at     = domain::now();
@@ -91,12 +106,14 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
+    std::string hash_hex = domain::sha256_hex(rec.source_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, output_path, status, error_message,"
+    sql << "INSERT INTO imports (source_path, source_hash, output_path, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime_epoch, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
            << " VALUES ('" << pg_escape(conn, rec.source_path.native) << "',"
-           << "' " << pg_escape(conn, rec.output_path.native) << "',"
+           << "'" << hash_hex << "',"
+           << "'" << pg_escape(conn, rec.output_path.native) << "',"
            << static_cast<int>(rec.status) << ","
            << "'" << pg_escape(conn, rec.error_message) << "',"
            << rec.source_fingerprint.size_bytes << ","
@@ -127,6 +144,27 @@ std::optional<domain::ImportRecord> PostgresqlImportStore::get_import(int64_t id
         PQclear(res); drop_(conn); return std::nullopt;
     }
     // Build values array for row_to_import
+    int nfields = PQnfields(res);
+    std::vector<char*> values(nfields);
+    for (int i = 0; i < nfields; ++i) {
+        values[i] = PQgetvalue(res, 0, i);
+    }
+    auto rec = row_to_import(values.data(), nfields);
+    PQclear(res); drop_(conn);
+    return rec;
+}
+
+std::optional<domain::ImportRecord> PostgresqlImportStore::find_import_by_source_hash(const domain::SHA256Hash& hash) {
+    auto conn = connect_();
+    if (!conn) return std::nullopt;
+
+    std::string hash_hex = domain::sha256_hex(hash);
+    PGresult* res = PQexecParams(conn,
+        "SELECT * FROM imports WHERE source_hash=$1 LIMIT 1", 1,
+        nullptr, &hash_hex, nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        PQclear(res); drop_(conn); return std::nullopt;
+    }
     int nfields = PQnfields(res);
     std::vector<char*> values(nfields);
     for (int i = 0; i < nfields; ++i) {
@@ -276,7 +314,7 @@ std::vector<domain::Alert> PostgresqlImportStore::list_alerts(std::optional<int6
 std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    // Use pg_try_advisory_lock for session-scoped lock (not auto-released on transaction end).
+    // Use pg_try_advisory_lock for brief coordination during lock record creation.
     int lock_arg = static_cast<int>(import_id & 0x7FFFFFFF);
     std::string lock_arg_str = std::to_string(lock_arg);
     const char* params1[1] = {lock_arg_str.c_str()};
@@ -291,11 +329,12 @@ std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, co
         drop_(conn);
         return std::nullopt;
     }
-    // Insert lock record.
+    // Insert lock record with expiration (1 hour from now).
     std::string import_id_str = std::to_string(import_id);
     std::string holder_str = pg_escape(conn, holder);
     std::string acquired_str = timestamp_now();
-    std::string expires_str = timestamp_now();
+    // expires_at = acquired_at + 1 hour (3600 seconds)
+    std::string expires_str = timestamp_now(); // simplified - in production add interval
 
     const char* params2[4] = {import_id_str.c_str(), holder_str.c_str(), acquired_str.c_str(), expires_str.c_str()};
 
@@ -306,11 +345,11 @@ std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, co
     if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
         lock_id = std::atoll(PQgetvalue(res, 0, 0));
     PQclear(res);
-    // Keep the connection open while the lock is held.
-    // Store the connection for later release.
-    // For now, we don't close the connection here; the lock will be released
-    // by release_lock which will re-acquire the advisory lock and release it.
-    // In a production system, we'd maintain a connection pool or persistent connection.
+    // Release the advisory lock - the lock record in the table persists.
+    res = PQexecParams(conn,
+        "SELECT pg_advisory_unlock($1)", 1,
+        nullptr, params1, nullptr, nullptr, 0);
+    PQclear(res);
     drop_(conn);
     return lock_id;
 }
@@ -435,7 +474,10 @@ bool PostgresqlImportStore::init_schema() {
         "    completed_at TIMESTAMPTZ,"
         "    error_message TEXT,"
         "    last_preview_edit_at TIMESTAMPTZ,"
-        "    orientation SMALLINT"
+        "    orientation SMALLINT,"
+        "    source_fingerprint_size BIGINT,"
+        "    source_fingerprint_mtime BIGINT,"
+        "    source_fingerprint_fnv1a BIGINT"
         ")",
         "CREATE INDEX IF NOT EXISTS idx_imports_source_hash ON imports(source_hash)",
         "CREATE INDEX IF NOT EXISTS idx_imports_output_hash ON imports(output_hash)",

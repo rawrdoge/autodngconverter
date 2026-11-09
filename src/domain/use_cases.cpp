@@ -33,16 +33,36 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         return outcome;
     }
 
-    // 2. Check lock.
+    // 2. Compute SHA256 hash for duplicate detection.
+    auto source_hash_opt = fs_.sha256_file(source);
+    if (!source_hash_opt) {
+        outcome.error = "Failed to compute source file hash";
+        log_.error(outcome.error);
+        return outcome;
+    }
+    domain::SHA256Hash source_hash = *source_hash_opt;
+
+    // 3. Check for existing import with same hash (duplicate detection).
+    auto existing = store_.find_import_by_source_hash(source_hash);
+    if (existing) {
+        outcome.error = "Duplicate import detected: file already imported (import_id=" + 
+                        std::to_string(existing->sequence_id) + ")";
+        log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
+        outcome.record = *existing;
+        return outcome;  // Not a failure, but duplicate detected
+    }
+
+    // 4. Check lock.
     if (store_.is_locked(-1)) { // simplified: no import_id yet
         // For new imports we skip lock check; locks are for reconversion safety.
     }
 
-    // 3. Create import record.
+    // 5. Create import record.
     domain::ImportRecord rec;
     rec.source_path   = source;
     rec.output_path   = dest;
     rec.status        = domain::ImportStatus::Queued;
+    rec.source_hash   = source_hash;
     rec.source_fingerprint = fs_.compute_fast_fingerprint(source);
     rec.created_at    = domain::now();
 
@@ -55,19 +75,19 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     rec.sequence_id = *id_opt;
     outcome.record = rec;
 
-    // 4. Update status → Converting.
+    // 6. Update status → Converting.
     rec.status = domain::ImportStatus::Converting;
     rec.started_at = domain::now();
     store_.update_import(rec);
 
-    // 5. Extract EXIF.
+    // 7. Extract EXIF.
     auto exif_opt = extractor_.extract(source);
     if (exif_opt) {
         log_.info("EXIF extracted: " + exif_opt->make + " " + exif_opt->model,
                   {{"source", source.native}});
     }
 
-    // 6. Convert.
+    // 8. Convert.
     auto result = engine_.convert(source, dest, settings);
     if (!result) {
         rec.status = domain::ImportStatus::Failed;
@@ -79,7 +99,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         return outcome;
     }
 
-    // 7. Success.
+    // 9. Success.
     rec.status     = domain::ImportStatus::Completed;
     rec.output_path = *result;
     rec.completed_at = domain::now();
@@ -177,12 +197,20 @@ domain::ScanResult Scan::execute(const std::string& input_dir,
     auto files = fs_.list_directory(input_dir, "");
     std::set<std::string> seen_hashes;
 
+    // Normalize supported extensions to lowercase for case-insensitive comparison.
+    std::set<std::string> normalized_exts;
+    for (const auto& ext : supported_extensions) {
+        std::string lower = ext;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        normalized_exts.insert(lower);
+    }
+
     for (const auto& fp : files) {
-        bool is_raw = false;
-        for (const auto& ext : supported_extensions) {
-            if (fp.extension() == ext) { is_raw = true; break; }
-        }
-        if (!is_raw) continue;
+        std::string ext = fp.extension();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (!normalized_exts.count(ext)) continue;
 
         auto hash = fs_.sha256_file(fp);
         if (!hash) continue;

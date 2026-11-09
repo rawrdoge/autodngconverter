@@ -19,6 +19,7 @@ public:
     // ── CRUD on imports ───────────────────────────────────────────────────────
     virtual std::optional<int64_t> create_import(const ImportRecord& rec) = 0;
     virtual std::optional<ImportRecord> get_import(int64_t id) = 0;
+    virtual std::optional<ImportRecord> find_import_by_source_hash(const SHA256Hash& hash) = 0;
     virtual bool update_import(ImportRecord rec) = 0;
     virtual std::vector<ImportRecord> list_imports(std::optional<ImportStatus> status_filter = std::nullopt) = 0;
 
