@@ -36,10 +36,11 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     }
 
     // 2. Compute SHA256 hash for duplicate detection.
-    auto source_hash_opt = fs_.sha256_file(source);
+    int hash_errno = 0;
+    auto source_hash_opt = fs_.sha256_file(source, &hash_errno);
     if (!source_hash_opt) {
         outcome.error = "Failed to compute source file hash";
-        log_.LogFilesystemReadError("", source.native, EIO, "sha256_file");
+        log_.LogFilesystemReadError("", source.native, hash_errno ?: EIO, "sha256_file");
         log_.error(outcome.error);
         return outcome;
     }
@@ -146,7 +147,11 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     // 7. Extract EXIF.
     auto exif_opt = extractor_.extract(source);
     if (!exif_opt) {
-        log_.LogExifExtractionFailed(std::to_string(rec.sequence_id), source.native, "extraction returned empty", false);
+        if (extractor_.is_available()) {
+            log_.LogExifExtractionFailed(std::to_string(rec.sequence_id), source.native, "extraction returned empty", false);
+        } else {
+            log_.debug("EXIF extraction skipped (extractor not available)", {{"source", source.native}});
+        }
     } else {
         log_.info("EXIF extracted: " + exif_opt->make + " " + exif_opt->model,
                   {{"source", source.native}});
@@ -286,7 +291,8 @@ domain::ScanResult Scan::execute(const std::string& input_dir,
                        [](unsigned char c) { return std::tolower(c); });
         if (!normalized_exts.count(ext)) continue;
 
-        auto hash = fs_.sha256_file(fp);
+        int hash_errno = 0;
+        auto hash = fs_.sha256_file(fp, &hash_errno);
         if (!hash) continue;
 
         auto hhex = domain::sha256_hex(*hash);

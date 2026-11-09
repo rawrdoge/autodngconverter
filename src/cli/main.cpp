@@ -369,6 +369,7 @@ int run_application(int argc, char** argv) {
         std::optional<ExifResult> extract(const FilePath&) override {
             return std::nullopt;
         }
+        bool is_available() const override { return false; }
     };
     extractor = std::make_unique<NoopExifExtractor>();
     log->warn("WITH_EXIFTOOL not enabled - using no-op ExifExtractor");

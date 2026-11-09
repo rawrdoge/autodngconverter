@@ -27,7 +27,8 @@ public:
     virtual bool delete_file(const FilePath& path) = 0;
 
     // SHA-256 of a file (delegates to HashService).
-    virtual std::optional<SHA256Hash> sha256_file(const FilePath& path) = 0;
+    // On failure, sets errno_out (if non-null) to the system error code.
+    virtual std::optional<SHA256Hash> sha256_file(const FilePath& path, int* errno_out = nullptr) = 0;
 
     // Fast fingerprint: size + mtime + FNV-1a of first 4 KiB.
     virtual FastFingerprint compute_fast_fingerprint(const FilePath& path) = 0;

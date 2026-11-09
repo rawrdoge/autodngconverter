@@ -77,9 +77,12 @@ bool StdFileSystem::delete_file(const domain::FilePath& path) {
     return existed;
 }
 
-std::optional<domain::SHA256Hash> StdFileSystem::sha256_file(const domain::FilePath& path) {
+std::optional<domain::SHA256Hash> StdFileSystem::sha256_file(const domain::FilePath& path, int* errno_out) {
     std::ifstream f(to_fs(path), std::ios::binary);
-    if (!f) return std::nullopt;
+    if (!f) {
+        if (errno_out) *errno_out = errno;
+        return std::nullopt;
+    }
     std::vector<uint8_t> buf(65536);
     std::vector<uint8_t> all;
     // Stream directly to hash service if it supports incremental hashing,

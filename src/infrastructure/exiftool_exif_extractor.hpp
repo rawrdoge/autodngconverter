@@ -18,6 +18,7 @@ public:
 
     domain::HealthReport            health_check() override;
     std::optional<domain::ExifResult> extract(const domain::FilePath& path) override;
+    bool                            is_available() const override { return true; }
 
 private:
     std::string binary_path_;
