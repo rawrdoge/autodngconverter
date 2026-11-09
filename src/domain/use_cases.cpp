@@ -40,7 +40,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     auto source_hash_opt = fs_.sha256_file(source, &hash_errno);
     if (!source_hash_opt) {
         outcome.error = "Failed to compute source file hash";
-        log_.LogFilesystemReadError("", source.native, hash_errno ?: EIO, "sha256_file");
+        log_.LogFilesystemReadError("", source.native, hash_errno != 0 ? hash_errno : EIO, "sha256_file");
         log_.error(outcome.error);
         return outcome;
     }
