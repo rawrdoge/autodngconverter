@@ -141,7 +141,9 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     }
 
     // 8. Convert.
-    auto result = engine_.convert(source, dest, settings);
+    // Use the resolved output path (auto-generated IMG_{id}.dng if dest was a directory)
+    const domain::FilePath& output_path = rec.output_path;
+    auto result = engine_.convert(source, output_path, settings);
     if (!result) {
         rec.status = domain::ImportStatus::Failed;
         rec.error_message = "Conversion failed";
