@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(rawimport_pipeline VERSION 2.3.7 LANGUAGES CXX)
+project(rawimport_pipeline VERSION 2.3.8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,10 +91,9 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
     endif()
   endif()
 
-  # Adobe DNG: binary spawn only, no library needed
-  list(APPEND INFRA_SOURCES src/infrastructure/adobe_dng_converter_engine.cpp)
   if(WITH_ADOBE_DNG)
     add_compile_definitions(WITH_ADOBE_DNG)
+    list(APPEND INFRA_SOURCES src/infrastructure/adobe_dng_converter_engine.cpp)
   endif()
 
   if(WITH_EXIFTOOL)

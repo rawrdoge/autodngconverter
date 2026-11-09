@@ -13,6 +13,18 @@
 
 #ifdef _WIN32
 #include <windows.h>
+
+// On Windows, MultiByteToWideChar with -1 length includes a trailing null.
+// We must strip it from every converted string before appending to the command line.
+static inline std::wstring utf8_to_wide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (wlen <= 1) return std::wstring();
+    std::wstring w(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], wlen);
+    w.resize(wlen - 1);  // strip trailing null from -1 length
+    return w;
+}
 #else
 #include <unistd.h>
 #include <sys/wait.h>
@@ -65,20 +77,15 @@ int exec_cmd(const std::vector<std::string>& args) {
 #ifdef _WIN32
     // Build quoted UTF-16 command line for CreateProcessW.
     // Source args are UTF-8 strings; widen via CP_UTF8 so multibyte paths
-    // (Cyrillic, CJK, etc.) survive intact. MultiByteToWideChar with -1
-    // includes a trailing null — resized out afterwards so wcmd stays clean.
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, nullptr, 0);
-    std::wstring wcmd(wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, args.data()[0].c_str(), -1, &wcmd[0], wlen);
-    wcmd.resize(wlen - 1);
+    // (Cyrillic, CJK, etc.) survive intact. utf8_to_wide strips the trailing
+    // null that MultiByteToWideChar appends when length=-1.
+    std::wstring wcmd = utf8_to_wide(args.data()[0]);
+    if (wcmd.empty()) return -1;
     for (size_t i = 1; i < args.size(); ++i) {
         wcmd += L' ';
-        const std::string quoted = quote_cmdline_arg_win(args[i].c_str());
-        const char* src = quoted.c_str();
-        wlen = MultiByteToWideChar(CP_UTF8, 0, src, -1, nullptr, 0);
-        std::wstring part(wlen, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, src, -1, &part[0], wlen);
-        part.resize(wlen - 1);
+        std::string quoted = quote_cmdline_arg_win(args[i].c_str());
+        std::wstring part = utf8_to_wide(quoted);
+        if (part.empty()) return -1;
         wcmd += part;
     }
     STARTUPINFOW si{}; si.cb = sizeof(si);
@@ -89,8 +96,7 @@ int exec_cmd(const std::vector<std::string>& args) {
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD rc;
     GetExitCodeProcess(pi.hProcess, &rc);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
     return static_cast<int>(rc);
 #else
     // POSIX: build argv array and spawn via execvp — no shell involvement.

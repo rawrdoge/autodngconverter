@@ -703,13 +703,13 @@ int64_t PostgresqlImportStore::count_active_locks() {
     if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
         PQclear(res);
         drop_(conn);
-        return 0;
+        return -1;
     }
     std::string tbl(PQgetvalue(res, 0, 0));
     PQclear(res);
     if (tbl.empty()) {
         drop_(conn);
-        return 0;
+        return -1;
     }
 
     std::ostringstream sql;

@@ -206,6 +206,14 @@ MigrationResult MigrationRunner::create_target_schema_() {
 MigrationResult MigrationRunner::drain_locks_() {
     MigrationResult result;
 
+    // Dry-run mode must not touch the source — report only.
+    if (opts_.dry_run) {
+        result.warnings.push_back(
+            "Dry run: would check for active locks on source, wait up to 300s for drain, "
+            "then force-expire stale locks if any remain.");
+        return result;
+    }
+
     // Create source store
     std::unique_ptr<domain::ImportStore> source;
     if (opts_.from == SourceDB::MariaDB) {
@@ -223,14 +231,6 @@ MigrationResult MigrationRunner::drain_locks_() {
         return result;
     }
     if (active == 0) return result;
-
-    // Dry-run mode must not change the source — report only.
-    if (opts_.dry_run) {
-        result.warnings.push_back(
-            "Dry run: " + std::to_string(active) +
-            " active lock(s) detected; would wait up to 300s for drain, then force-expire stale locks.");
-        return result;
-    }
 
     result.warnings.push_back(
         "Found " + std::to_string(active) + " active lock(s). Waiting for drain...");
