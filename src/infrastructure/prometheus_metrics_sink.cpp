@@ -23,11 +23,21 @@ static std::string prometheus_escape(const std::string& v) {
     return out;
 }
 
+static std::string key_escape(const std::string& v) {
+    std::string out;
+    out.reserve(v.size() + 4);
+    for (char c : v) {
+        if (c == '\\' || c == ',' || c == '=') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
 static std::string make_key_str(const std::map<std::string, std::string>& labels) {
     std::string s;
     for (const auto& [k, v] : labels) {
         if (!s.empty()) s += ",";
-        s += k + "=" + v;
+        s += k + "=" + key_escape(v);
     }
     return s;
 }

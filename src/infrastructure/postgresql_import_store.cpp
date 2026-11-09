@@ -709,7 +709,7 @@ int64_t PostgresqlImportStore::count_active_locks() {
     PQclear(res);
     if (tbl.empty()) {
         drop_(conn);
-        return -1;
+        return 0;
     }
 
     std::ostringstream sql;
