@@ -374,12 +374,21 @@ int run_application(int argc, char** argv) {
                        {"unchanged", std::to_string(result.unchanged_files.size())}});
             // Import new files
             for (const auto& fp : result.new_files) {
-                domain::FilePath dest{output_dir + "/" + fp.filename()};
-                // Replace extension with .dng
-                auto dot = dest.native.find_last_of('.');
-                if (dot != std::string::npos) {
-                    dest.native = dest.native.substr(0, dot) + ".dng";
+                // Use sequence ID from import record to ensure unique output paths
+                // First, create a provisional import record to get a sequence ID
+                domain::ImportRecord provisional_rec;
+                provisional_rec.source_path = fp;
+                provisional_rec.output_path = domain::FilePath{output_dir + "/placeholder.dng"};
+                provisional_rec.status = domain::ImportStatus::Queued;
+                provisional_rec.source_fingerprint = fs.compute_fast_fingerprint(fp);
+                provisional_rec.created_at = domain::now();
+                auto seq_id = store->create_import(provisional_rec);
+                if (!seq_id) {
+                    log->error("Failed to create provisional import record for: " + fp.native);
+                    continue;
                 }
+                // Build unique output path: IMG_{seq_id}.dng
+                domain::FilePath dest{output_dir + "/IMG_" + std::to_string(*seq_id) + ".dng"};
                 ConversionSettings settings;
                 auto outcome = import_uc.execute(fp, dest, settings);
                 if (outcome.success) {
