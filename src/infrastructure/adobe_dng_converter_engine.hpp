@@ -25,6 +25,7 @@ public:
     std::optional<domain::FilePath> convert(const domain::FilePath& source,
                                              const domain::FilePath& dest,
                                              const domain::ConversionSettings& settings) override;
+    std::string                       name() const override { return "adobe_dng"; }
 
 private:
     std::string binary_path_;

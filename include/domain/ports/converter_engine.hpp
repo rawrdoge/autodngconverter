@@ -25,6 +25,9 @@ public:
     virtual std::optional<FilePath> convert(const FilePath& source,
                                              const FilePath& dest,
                                              const ConversionSettings& settings) = 0;
+
+    // Engine identifier for logging/metrics (e.g., "dnglab", "adobe_dng")
+    virtual std::string name() const = 0;
 };
 
 } // namespace rawimport::domain

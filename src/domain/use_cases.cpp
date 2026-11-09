@@ -161,9 +161,9 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         rec.error_message = "Conversion failed";
         store_.update_import(rec);
         outcome.error = "Conversion failed";
-        metrics_.increment_counter("imports_failed", 1, {{"engine", engine_name(settings.engine)}});
+        metrics_.increment_counter("imports_failed", 1, {{"engine", engine_.name()}});
         log_.LogImportFailed(std::to_string(rec.sequence_id), outcome.error);
-        log_.LogConversionFailedEngineError(std::to_string(rec.sequence_id), engine_name(settings.engine), -1, "engine returned null result");
+        log_.LogConversionFailedEngineError(std::to_string(rec.sequence_id), engine_.name(), -1, "engine returned null result");
         log_.error(outcome.error, {{"source", source.native}});
         return outcome;
     }
@@ -179,7 +179,7 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     outcome.error.clear();
 
     metrics_.increment_counter("imports_completed", 1,
-                                {{"engine", engine_name(settings.engine)}});
+                                {{"engine", engine_.name()}});
     log_.info("Import completed: " + source.native + " -> " + result->native);
     return outcome;
 }
@@ -210,7 +210,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto imp = store_.get_import(import_id);
     if (!imp) {
         outcome.error = "Import record not found: " + std::to_string(import_id);
-        log_.LogReconversionSourceMissing(std::to_string(import_id), source_dng.native);
+        log_.LogDbQueryFailed(std::to_string(import_id), "get_import returned empty (record not found or DB error)");
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -241,7 +241,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
         store_.update_reconversion(rec);
         outcome.error = "Reconversion failed";
         log_.LogImportFailed(std::to_string(import_id), outcome.error);
-        log_.LogConversionFailedEngineError(std::to_string(import_id), engine_name(settings.engine), -1, "engine returned null result");
+        log_.LogConversionFailedEngineError(std::to_string(import_id), engine_.name(), -1, "engine returned null result");
         store_.release_lock(*lock_opt);
         return outcome;
     }
