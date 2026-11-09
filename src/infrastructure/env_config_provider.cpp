@@ -55,15 +55,15 @@ std::map<std::string, std::string> EnvConfigProvider::to_map() {
     // Return everything starting with prefix_ for introspection.
     // getenv doesn't enumerate, so we expose known keys.
     const std::vector<std::string> known = {
-        "RAWIMPORT_OUTPUT_DIR", "RAWIMPORT_INPUT_DIR", "RAWIMPORT_CONVERTER_ENGINE",
-        "RAWIMPORT_DB_CONNECTION", "RAWIMPORT_DATABASE_URL", "RAWIMPORT_DB_DRIVER",
-        "RAWIMPORT_LOG_LEVEL", "RAWIMPORT_MAX_WORKERS",
-        "RAWIMPORT_IMMICH_BASE_URL", "RAWIMPORT_IMMICH_API_KEY",
-        "RAWIMPORT_EXIFTOOL_PATH", "RAWIMPORT_DNGLAB_PATH", "RAWIMPORT_ADOBE_DNG_PATH",
+        "OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
+        "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER",
+        "LOG_LEVEL", "MAX_WORKERS",
+        "IMMICH_BASE_URL", "IMMICH_API_KEY",
+        "EXIFTOOL_PATH", "DNGLAB_PATH", "ADOBE_DNG_PATH",
     };
     for (const auto& k : known) {
         auto v = get_string(k);
-        if (v) out[k] = *v;
+        if (v) out[prefix_ + k] = *v;
     }
     return out;
 }

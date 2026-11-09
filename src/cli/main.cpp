@@ -130,6 +130,28 @@ int run_application(int argc, char** argv) {
         return 0;
     }
 
+    // ─── Config Command (validate and display config, no DB/hash required) ──────────
+    if (command == "config") {
+        auto config = std::make_shared<EnvConfigProvider>("RAWIMPORT_");
+        ConfigValidate config_uc(*config);
+        auto report = config_uc.execute();
+        std::cout << "Config valid: " << (report.valid ? "yes" : "no") << "\n";
+        if (!report.missing_keys.empty()) {
+            std::cout << "Missing keys:\n";
+            for (const auto& k : report.missing_keys) std::cout << "  - " << k << "\n";
+        }
+        auto cfg_map = config->to_map();
+        for (const auto& [k, v] : cfg_map) {
+            // Redact sensitive values
+            if (k == "RAWIMPORT_DB_CONNECTION" || k == "RAWIMPORT_DATABASE_URL" || k == "RAWIMPORT_IMMICH_API_KEY") {
+                std::cout << k << "=[REDACTED]\n";
+            } else {
+                std::cout << k << "=" << v << "\n";
+            }
+        }
+        return report.valid ? 0 : 1;
+    }
+
     // ─── Migrate Command (handles its own config via CLI args) ──────────────────
 #ifdef HAVE_MIGRATION
     if (command == "migrate") {
@@ -345,7 +367,6 @@ int run_application(int argc, char** argv) {
     Reconversion reconversion_uc(*store, *engine, fs, *log);
     Scan scan_uc(*store, fs, *hash_svc, *log);
     Stats stats_uc(*store);
-    ConfigValidate config_uc(*config);
 
     // ─── Command Dispatch ──────────────────────────────────────────────────────
 
@@ -506,24 +527,6 @@ int run_application(int argc, char** argv) {
             std::cout << "Active locks: " << snap.active_locks << "\n";
             std::cout << "Alerts: " << snap.alerts_count << "\n";
             return 0;
-        }
-        else if (command == "config") {
-            auto report = config_uc.execute();
-            std::cout << "Config valid: " << (report.valid ? "yes" : "no") << "\n";
-            if (!report.missing_keys.empty()) {
-                std::cout << "Missing keys:\n";
-                for (const auto& k : report.missing_keys) std::cout << "  - " << k << "\n";
-            }
-            auto cfg_map = config->to_map();
-            for (const auto& [k, v] : cfg_map) {
-                // Redact sensitive values
-                if (k == "DB_CONNECTION" || k == "DATABASE_URL" || k == "IMMICH_API_KEY") {
-                    std::cout << k << "=[REDACTED]\n";
-                } else {
-                    std::cout << k << "=" << v << "\n";
-                }
-            }
-            return report.valid ? 0 : 1;
         }
         else {
             log->error("Unknown command: " + command);

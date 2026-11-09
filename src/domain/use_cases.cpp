@@ -339,10 +339,11 @@ ConfigValidate::ConfigValidate(domain::ConfigProvider& cfg) : cfg_(cfg) {}
 
 domain::ValidationReport ConfigValidate::execute() {
     std::map<std::string, std::string> cfg;
-    for (const auto& k : {"OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
-                           "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER"}) {
+    const std::vector<std::string> keys = {"OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
+                                           "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER"};
+    for (const auto& k : keys) {
         auto v = cfg_.get_string(k);
-        if (v) cfg[k] = *v;
+        if (v) cfg["RAWIMPORT_" + k] = *v;
     }
     return domain::validate_config(cfg);
 }
