@@ -347,7 +347,7 @@ private:
             oss << "[corr:" << g_correlation_id << "] ";
         }
         oss << '[' << level << "] " << event << ": ";
-        bool first = true;
+        bool first = false;
         for (const auto& [k, v] : fields) {
             if (!first) oss << ", ";
             oss << k << '=' << v;
@@ -375,7 +375,7 @@ private:
         oss << "\"event\":" << json_escape(std::string(event));
 
         // Fields
-        bool first = true;
+        bool first = false;
         for (const auto& [k, v] : fields) {
             if (!first) oss << ',';
             oss << json_escape(k) << ':' << json_escape(v);

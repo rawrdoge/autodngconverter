@@ -13,6 +13,9 @@
 // Pull in adapter implementations so they're in the same TU as tests.
 #include "../../src/infrastructure/env_config_provider.cpp"
 #include "../../src/infrastructure/prometheus_metrics_sink.cpp"
+#ifdef HAVE_OPENSSL
+#include "../../src/infrastructure/openssl_hash_service.cpp"
+#endif
 
 #include "domain/types.hpp"
 
@@ -173,6 +176,19 @@ TEST(metrics_different_labels_different_entries) {
     UTEST_ASSERT(rendered.find("/api/a") != std::string::npos);
     UTEST_ASSERT(rendered.find("/api/b") != std::string::npos);
 }
+
+// ─── OpenSSL HashService ─────────────────────────────────────────────────────
+
+#ifdef HAVE_OPENSSL
+TEST(hash_fnv1a_known_values) {
+    OpenSSLHashService svc;
+    uint64_t empty_hash = svc.fnv1a_64({});
+    UTEST_ASSERT_EQ(empty_hash, 14695981039346656037ULL);
+    std::vector<uint8_t> hello = {'h','e','l','l','o'};
+    uint64_t hello_hash = svc.fnv1a_64(hello);
+    UTEST_ASSERT_EQ(hello_hash, 11831194018420276491ULL);
+}
+#endif
 
 int main(int argc, const char** argv) {
     (void)argc; (void)argv;
