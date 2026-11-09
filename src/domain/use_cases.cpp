@@ -44,12 +44,43 @@ ImportOutcome Import::execute(const domain::FilePath& source,
 
     // 3. Check for existing import with same hash (duplicate detection).
     auto existing = store_.find_import_by_source_hash(source_hash);
+    domain::ImportRecord rec;
+    bool reuse_existing = false;
     if (existing) {
-        outcome.error = "Duplicate import detected: file already imported (import_id=" + 
-                        std::to_string(existing->sequence_id) + ")";
-        log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
-        outcome.record = *existing;
-        return outcome;  // Not a failure, but duplicate detected
+        // If completed, treat as duplicate and return existing record
+        if (existing->status == domain::ImportStatus::Completed) {
+            outcome.error = "Duplicate import detected: file already imported (import_id=" +
+                            std::to_string(existing->sequence_id) + ")";
+            log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
+            outcome.record = *existing;
+            return outcome;  // Not a failure, but duplicate detected
+        }
+        // If failed, allow retry by reusing the existing record
+        if (existing->status == domain::ImportStatus::Failed) {
+            log_.info("Retrying previously failed import", {{"source", source.native}, {"import_id", std::to_string(existing->sequence_id)}});
+            // Update the existing record with new destination and reset status
+            existing->output_path = dest;
+            existing->status = domain::ImportStatus::Queued;
+            existing->error_message.clear();
+            existing->started_at = domain::Instant{};
+            existing->completed_at = domain::Instant{};
+            if (!store_.update_import(*existing)) {
+                outcome.error = "Failed to update import record for retry";
+                log_.error(outcome.error);
+                return outcome;
+            }
+            rec = *existing;
+            reuse_existing = true;
+            // Continue to conversion (fall through)
+        }
+        // If queued or converting, skip this file (another process may be handling it)
+        if (existing->status == domain::ImportStatus::Queued || existing->status == domain::ImportStatus::Converting) {
+            outcome.error = "Import already in progress or queued (import_id=" +
+                            std::to_string(existing->sequence_id) + ")";
+            log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}, {"status", domain::import_status_str(existing->status)}});
+            outcome.record = *existing;
+            return outcome;
+        }
     }
 
     // 4. Check lock.
@@ -57,22 +88,44 @@ ImportOutcome Import::execute(const domain::FilePath& source,
         // For new imports we skip lock check; locks are for reconversion safety.
     }
 
-    // 5. Create import record.
-    domain::ImportRecord rec;
-    rec.source_path   = source;
-    rec.output_path   = dest;
-    rec.status        = domain::ImportStatus::Queued;
-    rec.source_hash   = source_hash;
-    rec.source_fingerprint = fs_.compute_fast_fingerprint(source);
-    rec.created_at    = domain::now();
+    // 5. Create import record (only if not reusing existing failed record).
+    if (!reuse_existing) {
+        rec.source_path   = source;
+        // If dest.native ends with '/' or is empty, treat as directory for auto-naming
+        bool auto_name = dest.native.empty() || dest.native.back() == '/' || dest.native.back() == '\\';
+        if (auto_name) {
+            // Placeholder - will be updated after sequence ID is allocated
+            rec.output_path = domain::FilePath{dest.native + "placeholder.dng"};
+        } else {
+            rec.output_path = dest;
+        }
+        rec.status        = domain::ImportStatus::Queued;
+        rec.source_hash   = source_hash;
+        rec.source_fingerprint = fs_.compute_fast_fingerprint(source);
+        rec.created_at    = domain::now();
 
-    auto id_opt = store_.create_import(rec);
-    if (!id_opt) {
-        outcome.error = "Failed to create import record";
-        log_.error(outcome.error);
-        return outcome;
+        auto id_opt = store_.create_import(rec);
+        if (!id_opt) {
+            outcome.error = "Failed to create import record";
+            log_.error(outcome.error);
+            return outcome;
+        }
+        rec.sequence_id = *id_opt;
+
+        // If auto-naming, update output path with sequence ID
+        if (auto_name) {
+            std::string dir = dest.native;
+            if (!dir.empty() && (dir.back() == '/' || dir.back() == '\\')) {
+                dir.pop_back();
+            }
+            rec.output_path = domain::FilePath{dir + "/IMG_" + std::to_string(rec.sequence_id) + ".dng"};
+            if (!store_.update_import(rec)) {
+                outcome.error = "Failed to update import record with output path";
+                log_.error(outcome.error);
+                return outcome;
+            }
+        }
     }
-    rec.sequence_id = *id_opt;
     outcome.record = rec;
 
     // 6. Update status → Converting.

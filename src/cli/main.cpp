@@ -366,6 +366,25 @@ int run_application(int argc, char** argv) {
         }
         // Polling interval (seconds)
         int poll_interval = config->get_int("WATCH_POLL_INTERVAL").value_or(30);
+        // File stability check interval (milliseconds)
+        int stability_interval_ms = config->get_int("WATCH_STABILITY_INTERVAL_MS").value_or(1000);
+        // Max stability checks before giving up
+        int max_stability_checks = config->get_int("WATCH_MAX_STABILITY_CHECKS").value_or(30);
+
+        // Lambda to wait for file size and mtime to stabilize
+        auto wait_for_file_stability = [&](const domain::FilePath& path) -> bool {
+            auto prev_fp = fs.compute_fast_fingerprint(path);
+            for (int i = 0; i < max_stability_checks; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(stability_interval_ms));
+                auto curr_fp = fs.compute_fast_fingerprint(path);
+                if (curr_fp.size_bytes == prev_fp.size_bytes && curr_fp.mtime == prev_fp.mtime) {
+                    return true;  // File has stabilized
+                }
+                prev_fp = curr_fp;
+            }
+            return false;  // Max checks exceeded
+        };
+
         // Run continuous scan/import loop
         for (;;) {
             auto result = scan_uc.execute(watch_dir, extensions);
@@ -374,23 +393,16 @@ int run_application(int argc, char** argv) {
                        {"unchanged", std::to_string(result.unchanged_files.size())}});
             // Import new files
             for (const auto& fp : result.new_files) {
-                // Use sequence ID from import record to ensure unique output paths
-                // First, create a provisional import record to get a sequence ID
-                domain::ImportRecord provisional_rec;
-                provisional_rec.source_path = fp;
-                provisional_rec.output_path = domain::FilePath{output_dir + "/placeholder.dng"};
-                provisional_rec.status = domain::ImportStatus::Queued;
-                provisional_rec.source_fingerprint = fs.compute_fast_fingerprint(fp);
-                provisional_rec.created_at = domain::now();
-                auto seq_id = store->create_import(provisional_rec);
-                if (!seq_id) {
-                    log->error("Failed to create provisional import record for: " + fp.native);
+                // Wait for file to stabilize (size and mtime stop changing)
+                if (!wait_for_file_stability(fp)) {
+                    log->warn("File did not stabilize, skipping: " + fp.native);
                     continue;
                 }
-                // Build unique output path: IMG_{seq_id}.dng
-                domain::FilePath dest{output_dir + "/IMG_" + std::to_string(*seq_id) + ".dng"};
+                
+                // Pass output directory with trailing slash to trigger auto-naming in Import::execute
+                domain::FilePath dest_dir{output_dir + "/"};
                 ConversionSettings settings;
-                auto outcome = import_uc.execute(fp, dest, settings);
+                auto outcome = import_uc.execute(fp, dest_dir, settings);
                 if (outcome.success) {
                     log->info("Auto-imported: " + fp.native + " -> " + outcome.record.output_path.native);
                 } else {
