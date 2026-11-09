@@ -12,7 +12,7 @@ CREATE USER rawimport WITH PASSWORD 'your-password';
 GRANT ALL PRIVILEGES ON DATABASE rawimport TO rawimport;
 ```
 
-**2. Configure** — `cp .env.example .env`, set the database DSN (`RAWIMPORT_DB_DRIVER=postgresql`, `RAWIMPORT_DB_CONNECTION=postgresql://rawimport:your-password@localhost:5432/rawimport`).
+**2. Configure** — `cp .env.example .env`, set the database DSN (`RAWIMPORT_DB_DRIVER=postgresql`, `RAWIMPORT_DB_CONNECTION=postgresql://rawimport:***@localhost:5432/rawimport`).
 
 **3. Map volumes** in `docker-compose.yml` to your NAS paths:
 
@@ -37,25 +37,25 @@ All via environment variables (`.env`); host paths via `docker-compose.yml` volu
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DB_DRIVER` | `postgresql` | Database backend (`postgresql`, `mariadb`) |
-| `DB_CONNECTION` / `DATABASE_URL` | — | Database connection string DSN |
-| `DB_SSLMODE` | `disable` | TLS mode |
-| `WATCH_DIR` / `OUTPUT_DIR` / `ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
-| `FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
-| `FILE_PATTERN` | `IMG_{seq}` | Output filename |
-| `CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`) |
-| `CONVERTER_ENGINE_BIN` | — | Explicit engine binary path override |
-| `APPDATA_DIR` | `/appdata` | Appdata root for engines/config |
-| `EXIFTOOL_BIN` | `exiftool` | ExifTool path |
-| `POLL_INTERVAL` | `10` | Watcher poll seconds (also accepts legacy `POLL_INTERVAL_SEC`) |
-| `MAX_CONVERTER_WORKERS` | `0` | Parallel dnglab workers (0 = auto = CPU count, cap 8; forced 1 for `adobedng`) |
-| `EXIFTOOL_DAEMON` | `true` | Persistent exiftool subprocess for EXIF extraction |
-| `DEAD_LETTER_MAX_RETRIES` | `3` | Failures before a file moves to `/archive/failed/` |
-| `FAST_FINGERPRINT` | `true` | Skip full SHA-256 when size+mtime+first-4KB fingerprint is unchanged |
-| `LOG_LEVEL` / `PORT` / `API_TOKEN` | `info` / `8080` / — | Logging, API port, optional bearer token |
-| `GEN_THUMB_JPEG` | `false` | Sidecar thumbnail |
-| `DEF_COMPRESSION` / `DEF_DNG_VERSION` / `DEF_JPEG_QUALITY` / `DEF_LINEAR` | `lossless` / `1.4` / `92` / `false` | Conversion defaults |
-| `DEF_PREVIEW_MEDIUM` / `DEF_PREVIEW_FULL` | `1024x1024` / `4000x3000` | Preview sizes |
+| `RAWIMPORT_DB_DRIVER` | `postgresql` | Database backend (`postgresql`, `mariadb`) |
+| `RAWIMPORT_DB_CONNECTION` / `RAWIMPORT_DATABASE_URL` | — | Database connection string DSN |
+| `RAWIMPORT_DB_SSLMODE` | `disable` | TLS mode |
+| `RAWIMPORT_WATCH_DIR` / `RAWIMPORT_OUTPUT_DIR` / `RAWIMPORT_ARCHIVE_DIR` | `/watch` `/output` `/archive` | Container paths |
+| `RAWIMPORT_FOLDER_SCHEMA` | `%Y/%m` | Output subfolder (strftime) |
+| `RAWIMPORT_FILE_PATTERN` | `IMG_{seq}` | Output filename |
+| `RAWIMPORT_CONVERTER_ENGINE` | `dnglab` | Engine name (`dnglab`, `adobedng`) |
+| `RAWIMPORT_CONVERTER_ENGINE_BIN` | — | Explicit engine binary path override |
+| `RAWIMPORT_APPDATA_DIR` | `/appdata` | Appdata root for engines/config |
+| `RAWIMPORT_EXIFTOOL_BIN` | `exiftool` | ExifTool path |
+| `RAWIMPORT_POLL_INTERVAL` | `10` | Watcher poll seconds |
+| `RAWIMPORT_MAX_CONVERTER_WORKERS` | `0` | Parallel dnglab workers (0 = auto = CPU count, cap 8; forced 1 for `adobedng`) |
+| `RAWIMPORT_EXIFTOOL_DAEMON` | `true` | Persistent exiftool subprocess for EXIF extraction |
+| `RAWIMPORT_DEAD_LETTER_MAX_RETRIES` | `3` | Failures before a file moves to `/archive/failed/` |
+| `RAWIMPORT_FAST_FINGERPRINT` | `true` | Skip full SHA-256 when size+mtime+first-4KB fingerprint is unchanged |
+| `RAWIMPORT_LOG_LEVEL` / `RAWIMPORT_PORT` / `RAWIMPORT_API_TOKEN` | `info` / `8080` / — | Logging, API port, optional bearer token |
+| `RAWIMPORT_GEN_THUMB_JPEG` | `false` | Sidecar thumbnail |
+| `RAWIMPORT_DEF_COMPRESSION` / `RAWIMPORT_DEF_DNG_VERSION` / `RAWIMPORT_DEF_JPEG_QUALITY` / `RAWIMPORT_DEF_LINEAR` | `lossless` / `1.4` / `92` / `false` | Conversion defaults |
+| `RAWIMPORT_DEF_PREVIEW_MEDIUM` / `RAWIMPORT_DEF_PREVIEW_FULL` | `1024x1024` / `4000x3000` | Preview sizes |
 
 ### Engine Override
 

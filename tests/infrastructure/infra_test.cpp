@@ -100,8 +100,8 @@ TEST(env_config_to_map) {
     setenv("RAWIMPORT_OUTPUT_DIR", "/tmp/out", 1);
     EnvConfigProvider cfg("RAWIMPORT_");
     auto m = cfg.to_map();
-    UTEST_ASSERT(m.count("OUTPUT_DIR") == 1u);
-    UTEST_ASSERT_STRING(m["OUTPUT_DIR"].c_str(), "/tmp/out");
+    UTEST_ASSERT(m.count("RAWIMPORT_OUTPUT_DIR") == 1u);
+    UTEST_ASSERT_STRING(m["RAWIMPORT_OUTPUT_DIR"].c_str(), "/tmp/out");
     unsetenv("RAWIMPORT_OUTPUT_DIR");
 }
 

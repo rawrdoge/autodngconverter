@@ -184,36 +184,29 @@ struct ValidationReport {
 
 inline std::vector<RequiredConfigKey> required_config_keys() {
     return {
-        {"OUTPUT_DIR",   "Destination directory for converted DNG files"},
-        {"INPUT_DIR",    "Watched directory containing RAW source files (alias: WATCH_DIR)"},
-        {"CONVERTER_ENGINE", "Converter engine to use (dnglab | adobe_dng)"},
+        {"RAWIMPORT_OUTPUT_DIR",   "Destination directory for converted DNG files"},
+        {"RAWIMPORT_INPUT_DIR",    "Watched directory containing RAW source files"},
+        {"RAWIMPORT_CONVERTER_ENGINE", "Converter engine to use (dnglab | adobe_dng)"},
     };
 }
 
 // Validate a configuration map against the full set of rules:
-//  - OUTPUT_DIR, INPUT_DIR (or WATCH_DIR), CONVERTER_ENGINE are strictly required.
+//  - RAWIMPORT_OUTPUT_DIR, RAWIMPORT_INPUT_DIR, RAWIMPORT_CONVERTER_ENGINE are strictly required.
 //  - At least one of DB_CONNECTION or DATABASE_URL must be supplied.
 //  - DB_DRIVER is optional (defaults to "postgresql" at runtime).
 inline ValidationReport validate_config(const std::map<std::string, std::string>& cfg) {
     ValidationReport report;
     for (const auto& k : required_config_keys()) {
         auto it = cfg.find(k.name);
-        // Special case: INPUT_DIR can be satisfied by WATCH_DIR
-        if (k.name == "INPUT_DIR") {
-            if ((it == cfg.end() || it->second.empty()) &&
-                (cfg.find("WATCH_DIR") == cfg.end() || cfg.at("WATCH_DIR").empty())) {
-                report.missing_keys.push_back(k.name);
-            }
-        } else if (it == cfg.end() || it->second.empty()) {
+        if (it == cfg.end() || it->second.empty())
             report.missing_keys.push_back(k.name);
-        }
     }
-    const auto db_conn = cfg.find("DB_CONNECTION");
-    const auto db_url  = cfg.find("DATABASE_URL");
+    const auto db_conn = cfg.find("RAWIMPORT_DB_CONNECTION");
+    const auto db_url  = cfg.find("RAWIMPORT_DATABASE_URL");
     if ((db_conn == cfg.end() || db_conn->second.empty()) &&
         (db_url  == cfg.end() || db_url->second.empty())) {
-        report.missing_keys.push_back("DB_CONNECTION");
-        report.missing_keys.push_back("DATABASE_URL");
+        report.missing_keys.push_back("RAWIMPORT_DB_CONNECTION");
+        report.missing_keys.push_back("RAWIMPORT_DATABASE_URL");
     }
     report.valid = report.missing_keys.empty();
     return report;

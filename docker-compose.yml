@@ -6,25 +6,21 @@ services:
     container_name: rawimport
     restart: unless-stopped
     environment:
-      - DB_DRIVER=mariadb
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT:-3306}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - DB_SSLMODE=${DB_SSLMODE:-disable}
-      - WATCH_DIR=/watch
-      - OUTPUT_DIR=/output
-      - ARCHIVE_DIR=/archive
-      - CONVERTER_ENGINE=dnglab
-      - CONVERTER_ENGINE_BIN=${CONVERTER_ENGINE_BIN:-}
-      - APPDATA_DIR=/appdata
-      - EXIFTOOL_BIN=exiftool
-      - FOLDER_SCHEMA=%Y/%m
-      - FILE_PATTERN=IMG_{seq}
-      - POLL_INTERVAL=10
-      - LOG_LEVEL=info
-      - PORT=8080
+      - RAWIMPORT_DB_DRIVER=${RAWIMPORT_DB_DRIVER:-postgresql}
+      - RAWIMPORT_DB_CONNECTION=${RAWIMPORT_DB_CONNECTION:-postgresql://rawimport:${DB_PASSWORD}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-rawimport}}
+      - RAWIMPORT_DB_SSLMODE=${RAWIMPORT_DB_SSLMODE:-disable}
+      - RAWIMPORT_WATCH_DIR=/watch
+      - RAWIMPORT_OUTPUT_DIR=/output
+      - RAWIMPORT_ARCHIVE_DIR=/archive
+      - RAWIMPORT_CONVERTER_ENGINE=${RAWIMPORT_CONVERTER_ENGINE:-dnglab}
+      - RAWIMPORT_CONVERTER_ENGINE_BIN=${CONVERTER_ENGINE_BIN:-}
+      - RAWIMPORT_APPDATA_DIR=/appdata
+      - RAWIMPORT_EXIFTOOL_BIN=exiftool
+      - RAWIMPORT_FOLDER_SCHEMA=%Y/%m
+      - RAWIMPORT_FILE_PATTERN=IMG_{seq}
+      - RAWIMPORT_POLL_INTERVAL=10
+      - RAWIMPORT_LOG_LEVEL=info
+      - RAWIMPORT_PORT=8080
     volumes:
       - /mnt/nas/photos/watch:/watch
       - /mnt/nas/photos/output:/output

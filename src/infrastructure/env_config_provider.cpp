@@ -9,26 +9,15 @@
 
 namespace rawimport::infrastructure {
 
-// ─── EnvConfigProvider ────────────────────────────────────────────────────────
-// Resolve a logical key to either prefixed (RAWIMPORT_*) or unprefixed (legacy).
-// Supports aliases: INPUT_DIR <-> WATCH_DIR.
-static std::string resolve_config_key(const std::string& prefix, const std::string& key) {
-    // First check for prefixed key (new format)
-    std::string prefixed = prefix + key;
-    if (std::getenv(prefixed.c_str())) return prefixed;
-    // Fall back to unprefixed key (legacy format, e.g., OUTPUT_DIR, WATCH_DIR)
-    if (std::getenv(key.c_str())) return key;
-    // Alias: INPUT_DIR -> WATCH_DIR (legacy docker-compose uses WATCH_DIR)
-    if (key == "INPUT_DIR") {
-        if (std::getenv("WATCH_DIR")) return "WATCH_DIR";
-    }
-    return prefixed; // return prefixed for consistent error messages
-}
-
 EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
 
 std::string EnvConfigProvider::resolve_key(const std::string& key) const {
-    return resolve_config_key(prefix_, key);
+    // First check for prefixed key (new format)
+    std::string prefixed = prefix_ + key;
+    if (std::getenv(prefixed.c_str())) return prefixed;
+    // Fall back to unprefixed key (legacy format, e.g., OUTPUT_DIR, WATCH_DIR)
+    if (std::getenv(key.c_str())) return key;
+    return prefixed; // return prefixed for consistent error messages
 }
 
 std::optional<std::string> EnvConfigProvider::get_string(const std::string& key) {
@@ -66,11 +55,11 @@ std::map<std::string, std::string> EnvConfigProvider::to_map() {
     // Return everything starting with prefix_ for introspection.
     // getenv doesn't enumerate, so we expose known keys.
     const std::vector<std::string> known = {
-        "OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
-        "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER",
-        "LOG_LEVEL", "MAX_WORKERS",
-        "IMMICH_BASE_URL", "IMMICH_API_KEY",
-        "EXIFTOOL_PATH", "DNGLAB_PATH", "ADOBE_DNG_PATH",
+        "RAWIMPORT_OUTPUT_DIR", "RAWIMPORT_INPUT_DIR", "RAWIMPORT_CONVERTER_ENGINE",
+        "RAWIMPORT_DB_CONNECTION", "RAWIMPORT_DATABASE_URL", "RAWIMPORT_DB_DRIVER",
+        "RAWIMPORT_LOG_LEVEL", "RAWIMPORT_MAX_WORKERS",
+        "RAWIMPORT_IMMICH_BASE_URL", "RAWIMPORT_IMMICH_API_KEY",
+        "RAWIMPORT_EXIFTOOL_PATH", "RAWIMPORT_DNGLAB_PATH", "RAWIMPORT_ADOBE_DNG_PATH",
     };
     for (const auto& k : known) {
         auto v = get_string(k);

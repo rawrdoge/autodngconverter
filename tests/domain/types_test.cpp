@@ -79,16 +79,16 @@ TEST(fast_fingerprint_default) {
 TEST(required_config_keys_count) {
     auto keys = required_config_keys();
     UTEST_ASSERT_EQ(keys.size(), 3u);
-    UTEST_ASSERT_STRING(keys[0].name.c_str(), "OUTPUT_DIR");
-    UTEST_ASSERT_STRING(keys[1].name.c_str(), "INPUT_DIR");
-    UTEST_ASSERT_STRING(keys[2].name.c_str(), "CONVERTER_ENGINE");
+    UTEST_ASSERT_STRING(keys[0].name.c_str(), "RAWIMPORT_OUTPUT_DIR");
+    UTEST_ASSERT_STRING(keys[1].name.c_str(), "RAWIMPORT_INPUT_DIR");
+    UTEST_ASSERT_STRING(keys[2].name.c_str(), "RAWIMPORT_CONVERTER_ENGINE");
 }
 
 TEST(validate_config_missing_db) {
     std::map<std::string, std::string> cfg;
-    cfg["OUTPUT_DIR"]   = "/tmp/out";
-    cfg["INPUT_DIR"]    = "/tmp/in";
-    cfg["CONVERTER_ENGINE"] = "dnglab";
+    cfg["RAWIMPORT_OUTPUT_DIR"]   = "/tmp/out";
+    cfg["RAWIMPORT_INPUT_DIR"]    = "/tmp/in";
+    cfg["RAWIMPORT_CONVERTER_ENGINE"] = "dnglab";
     // No DB connection supplied → invalid.
     auto r = validate_config(cfg);
     UTEST_ASSERT(!r.valid);
@@ -97,17 +97,17 @@ TEST(validate_config_missing_db) {
 
 TEST(validate_config_either_db_key_sufficient) {
     std::map<std::string, std::string> cfg;
-    cfg["OUTPUT_DIR"]       = "/tmp/out";
-    cfg["INPUT_DIR"]        = "/tmp/in";
-    cfg["CONVERTER_ENGINE"] = "dnglab";
-    cfg["DB_CONNECTION"]    = "postgresql://localhost/db";
+    cfg["RAWIMPORT_OUTPUT_DIR"]       = "/tmp/out";
+    cfg["RAWIMPORT_INPUT_DIR"]        = "/tmp/in";
+    cfg["RAWIMPORT_CONVERTER_ENGINE"] = "dnglab";
+    cfg["RAWIMPORT_DB_CONNECTION"]    = "postgresql://localhost/db";
     // Only DB_CONNECTION present (DATABASE_URL absent) → valid.
     auto r = validate_config(cfg);
     UTEST_ASSERT(r.valid);
     UTEST_ASSERT_EQ(r.missing_keys.size(), 0u);
 
-    cfg.erase("DB_CONNECTION");
-    cfg["DATABASE_URL"] = "postgresql://localhost/db";
+    cfg.erase("RAWIMPORT_DB_CONNECTION");
+    cfg["RAWIMPORT_DATABASE_URL"] = "postgresql://localhost/db";
     // Only DATABASE_URL present → also valid.
     r = validate_config(cfg);
     UTEST_ASSERT(r.valid);
