@@ -52,8 +52,8 @@ ImportOutcome Import::execute(const domain::FilePath& source,
             outcome.error = "Duplicate import detected: file already imported (import_id=" +
                             std::to_string(existing->sequence_id) + ")";
             log_.LogCollisionDuplicateFound(
-                rec.output_path.filename(),
-                existing->output_path.filename(),
+                "",  // no sequence ID allocated for duplicate (not imported)
+                std::to_string(existing->sequence_id),
                 source_hash,
                 source.native);
             log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
