@@ -93,16 +93,16 @@ PostgresqlImportStore::PostgresqlImportStore(std::string conninfo)
 
 PostgresqlImportStore::~PostgresqlImportStore() = default;
 
-PGconn* PostgresqlImportStore::connect_() const {
-    return pg_connect(conninfo_);
+PgConnHandle PostgresqlImportStore::connect_() const {
+    return reinterpret_cast<PgConnHandle>(pg_connect(conninfo_));
 }
 
-void PostgresqlImportStore::drop_(PGconn* conn) const {
-    pg_drop(conn);
+void PostgresqlImportStore::drop_(PgConnHandle conn) const {
+    pg_drop(reinterpret_cast<PGconn*>(conn));
 }
 
-std::string PostgresqlImportStore::pg_error_(PGconn* conn) const {
-    return pg_error(conn);
+std::string PostgresqlImportStore::pg_error_(PgConnHandle conn) const {
+    return pg_error(reinterpret_cast<PGconn*>(conn));
 }
 
 // ── imports ───────────────────────────────────────────────────────────────────

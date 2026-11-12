@@ -13,12 +13,8 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque libpq connection.
-#ifdef WITH_POSTGRESQL
-#include <libpq-fe.h>
-#else
-struct PGconn;
-#endif
+// Opaque libpq connection (void* for cross-target compatibility; cast to PGconn* in .cpp).
+using PgConnHandle = void*;
 
 namespace rawimport::infrastructure {
 
@@ -88,9 +84,9 @@ public:
 
 private:
     std::string conninfo_;
-    PGconn* connect_() const;
-    void    drop_(PGconn* conn) const;
-    std::string pg_error_(PGconn* conn) const;
+    PgConnHandle connect_() const;
+       void        drop_(PgConnHandle conn) const;
+       std::string pg_error_(PgConnHandle conn) const;
 };
 
 } // namespace rawimport::infrastructure
