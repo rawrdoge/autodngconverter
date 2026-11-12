@@ -13,8 +13,7 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque libpq connection.
-struct PGconn;
+// Opaque libpq connection (defined in libpq-fe.h).
 
 namespace rawimport::infrastructure {
 

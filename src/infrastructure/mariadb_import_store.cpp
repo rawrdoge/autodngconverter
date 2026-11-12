@@ -90,7 +90,7 @@ MariadbImportStore::MariadbImportStore(std::string connection_string)
 
 MariadbImportStore::~MariadbImportStore() = default;
 
-MariadbImportStore::MariadbHandle MariadbImportStore::connect_() const {
+MYSQL* MariadbImportStore::connect_() const {
     return db_connect(connection_string_);
 }
 
@@ -154,7 +154,7 @@ std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
     if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
     MYSQL_ROW row = mysql_fetch_row(res);
-    auto rec = row_to_import(row, mysql_field_count(res));
+    auto rec = row_to_import(row, mysql_field_count(conn));
     mysql_free_result(res);
     return rec;
 }
@@ -173,7 +173,7 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
     if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
     MYSQL_ROW row = mysql_fetch_row(res);
-    auto rec = row_to_import(row, mysql_field_count(res));
+    auto rec = row_to_import(row, mysql_field_count(conn));
     mysql_free_result(res);
     return rec;
 }
@@ -215,7 +215,7 @@ std::vector<domain::ImportRecord> MariadbImportStore::list_imports(
     std::vector<domain::ImportRecord> result;
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(res)))
-        result.push_back(row_to_import(row, mysql_field_count(res)));
+        result.push_back(row_to_import(row, mysql_field_count(conn)));
     mysql_free_result(res);
     return result;
 }
@@ -653,7 +653,7 @@ MariadbImportStore::list_migration_rows(const std::string& table,
 
     std::vector<std::map<std::string, std::string>> result;
     MYSQL_ROW row;
-    unsigned int ncols = mysql_field_count(res);
+    unsigned int ncols = mysql_field_count(conn);
     while ((row = mysql_fetch_row(res))) {
         std::map<std::string, std::string> r;
         for (unsigned int i = 0; i < ncols; ++i) {

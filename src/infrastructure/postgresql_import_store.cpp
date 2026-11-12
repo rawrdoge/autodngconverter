@@ -33,9 +33,9 @@ std::string pg_error(PGconn* conn) {
 }
 
 std::string pg_escape(PGconn* conn, const std::string& s) {
-    char* escaped = PQescapeStringConn(conn, s.c_str(), s.size(), nullptr, nullptr);
-    std::string out(escaped ? escaped : "");
-    if (escaped) PQfreemem(escaped);
+    std::string out(s.size() * 2 + 1, '\0');
+    size_t len = PQescapeStringConn(conn, &out[0], s.c_str(), s.size(), nullptr);
+    out.resize(len);
     return out;
 }
 
