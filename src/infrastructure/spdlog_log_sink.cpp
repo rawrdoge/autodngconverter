@@ -1,12 +1,14 @@
 /*
  * rawimport-pipeline - spdlog LogSink adapter implementation
  * Structured JSON/text output with correlation IDs and event taxonomy.
+ * Compatible with spdlog 1.9+
  */
 #include "infrastructure/spdlog_log_sink.hpp"
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
+#include <spdlog/sinks/stderr_sinks.h>
 #include <spdlog/pattern_formatter.h>
 
 #include <algorithm>
@@ -21,35 +23,34 @@
 
 namespace rawimport::infrastructure {
 
-// Forward declare the nested Impl class
-class SpdlogLogSink::Impl;
-
 namespace {
 
 // Thread-local correlation ID.
 thread_local std::string g_correlation_id = "";
 
-// Format helpers.
-std::string to_spdlog_level(domain::LogLevel l) {
+// Convert domain LogLevel to spdlog level.
+spdlog::level::level_enum to_spdlog_level(domain::LogLevel l) {
     switch (l) {
-        case domain::LogLevel::Trace:   return "trace";
-        case domain::LogLevel::Debug:   return "debug";
-        case domain::LogLevel::Info:    return "info";
-        case domain::LogLevel::Warn:    return "warn";
-        case domain::LogLevel::Error:   return "error";
-        case domain::LogLevel::Critical:return "critical";
+        case domain::LogLevel::Trace:   return spdlog::level::trace;
+        case domain::LogLevel::Debug:   return spdlog::level::debug;
+        case domain::LogLevel::Info:    return spdlog::level::info;
+        case domain::LogLevel::Warn:    return spdlog::level::warn;
+        case domain::LogLevel::Error:   return spdlog::level::err;
+        case domain::LogLevel::Critical:return spdlog::level::critical;
     }
-    return "info";
+    return spdlog::level::info;
 }
 
-domain::LogLevel from_spdlog_level(const std::string& lvl) {
-    if (lvl == "trace")   return domain::LogLevel::Trace;
-    if (lvl == "debug")   return domain::LogLevel::Debug;
-    if (lvl == "info")    return domain::LogLevel::Info;
-    if (lvl == "warn")    return domain::LogLevel::Warn;
-    if (lvl == "error")   return domain::LogLevel::Error;
-    if (lvl == "critical")return domain::LogLevel::Critical;
-    return domain::LogLevel::Info;
+domain::LogLevel from_spdlog_level(spdlog::level::level_enum lvl) {
+    switch (lvl) {
+        case spdlog::level::trace: return domain::LogLevel::Trace;
+        case spdlog::level::debug: return domain::LogLevel::Debug;
+        case spdlog::level::info:  return domain::LogLevel::Info;
+        case spdlog::level::warn:  return domain::LogLevel::Warn;
+        case spdlog::level::err:   return domain::LogLevel::Error;
+        case spdlog::level::critical: return domain::LogLevel::Critical;
+        default: return domain::LogLevel::Info;
+    }
 }
 
 // JSON escaping for string values.
@@ -98,730 +99,422 @@ std::string log_format() {
         std::string v = env;
         std::transform(v.begin(), v.end(), v.begin(),
                        [](unsigned char c){ return std::tolower(c); });
-        if (v == "json" || v == "text") return v;
+        if (v == "json") return "json";
     }
     return "text";
 }
 
-} // anon
+} // anonymous namespace
 
-class SpdlogLogSink::Impl : public domain::LogSink {
+// ── Impl (Pimpl) ──────────────────────────────────────────────────────────────
+class SpdlogLogSink::Impl {
 public:
     explicit Impl(std::string logger_name)
-        : logger_name_(std::move(logger_name)), format_(log_format()) {
-        if (format_ == "json") {
-            setup_json_logger();
-        } else {
-            setup_text_logger();
-        }
-    }
-
-    // ─── Structured Logging ──────────────────────────────────────────────────
-    void LogStructured(std::string_view event,
-                       std::string_view level,
-                       const std::unordered_map<std::string, std::string>& fields) override {
-        if (format_ == "json") {
-            log_json_structured(event, level, fields);
-        } else {
-            log_text_structured(event, level, fields);
-        }
-    }
-
-    // ─── Correlation ID ──────────────────────────────────────────────────────
-    void SetCorrelationId(std::string_view id) override {
-        g_correlation_id = id;
-    }
-
-    void ClearCorrelationId() override {
-        g_correlation_id.clear();
-    }
-
-    std::string correlation_id() override {
-        return g_correlation_id;
-    }
-
-    // ─── Legacy Text Logging ─────────────────────────────────────────────────
-    void trace(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::trace, msg, ctx);
-    }
-    void debug(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::debug, msg, ctx);
-    }
-    void info(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::info, msg, ctx);
-    }
-    void warn(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::warn, msg, ctx);
-    }
-    void error(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::err, msg, ctx);
-    }
-    void critical(const std::string& msg, const std::map<std::string, std::string>& ctx) override {
-        log_text(spdlog::level::critical, msg, ctx);
-    }
-
-    bool is_enabled(domain::LogLevel level) override {
-        return logger_->should_log(to_spdlog_level(level));
-    }
-
-    domain::LogLevel minimum_level() override {
-        return from_spdlog_level(spdlog::level::to_string_view(logger_->level()).to_string());
-    }
-
-    // ─── Convenience Methods: Event Taxonomy ─────────────────────────────────
-
-    // collision.duplicate_hash (INFO)
-    void LogCollisionDuplicateHash(std::string_view sequence_id,
-                                   std::string_view duplicate_of,
-                                   std::string_view source_hash,
-                                   std::string_view duplicate_path) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"duplicate_of", std::string(duplicate_of)},
-            {"source_hash", std::string(source_hash)},
-            {"action", "moved_to_duplicates"},
-            {"duplicate_path", std::string(duplicate_path)}
-        };
-        LogStructured("collision.duplicate_hash", "INFO", fields);
-    }
-
-    // collision.duplicate_hash_dead_letter (WARN)
-    void LogCollisionDuplicateHashDeadLetter(std::string_view sequence_id,
-                                             std::string_view duplicate_of) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"duplicate_of", std::string(duplicate_of)},
-            {"action", "dead_lettered_to_failed"}
-        };
-        LogStructured("collision.duplicate_hash_dead_letter", "WARN", fields);
-    }
-
-    // conversion.failed.engine_error (ERROR)
-    void LogConversionFailedEngineError(std::string_view sequence_id,
-                                        std::string_view engine_name,
-                                        int exit_code,
-                                        std::string_view stderr_tail) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"engine_name", std::string(engine_name)},
-            {"exit_code", std::to_string(exit_code)},
-            {"stderr_tail", std::string(stderr_tail)}
-        };
-        LogStructured("conversion.failed.engine_error", "ERROR", fields);
-    }
-
-    // import.failed (ERROR)
-    void LogImportFailed(std::string_view sequence_id,
-                         std::string_view reason) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"reason", std::string(reason)}
-        };
-        LogStructured("import.failed", "ERROR", fields);
-    }
-
-    // collision.duplicate_found (WARN)
-    void LogCollisionDuplicateFound(std::string_view sequence_id,
-                                    std::string_view existing_sequence_id,
-                                    const domain::SHA256Hash& source_hash,
-                                    std::string_view duplicate_path) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"existing_sequence_id", std::string(existing_sequence_id)},
-            {"source_hash", domain::sha256_hex(source_hash)},
-            {"duplicate_path", std::string(duplicate_path)}
-        };
-        LogStructured("collision.duplicate_found", "WARN", fields);
-    }
-
-    // conversion.failed.hash_mismatch (ERROR)
-    void LogConversionFailedHashMismatch(std::string_view sequence_id,
-                                         std::string_view source_hash,
-                                         std::string_view output_hash) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"source_hash", std::string(source_hash)},
-            {"output_hash", std::string(output_hash)},
-            {"action", "dead_lettered"}
-        };
-        LogStructured("conversion.failed.hash_mismatch", "ERROR", fields);
-    }
-
-    // conversion.failed.timeout (ERROR)
-    void LogConversionFailedTimeout(std::string_view sequence_id,
-                                    int timeout_sec) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"timeout_sec", std::to_string(timeout_sec)},
-            {"action", "dead_lettered"}
-        };
-        LogStructured("conversion.failed.timeout", "ERROR", fields);
-    }
-
-    // dead_letter.max_retries (WARN)
-    void LogDeadLetterMaxRetries(std::string_view sequence_id,
-                                 int max_retries,
-                                 std::string_view last_error) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"max_retries", std::to_string(max_retries)},
-            {"last_error", std::string(last_error)},
-            {"action", "archived_to_failed"}
-        };
-        LogStructured("dead_letter.max_retries", "WARN", fields);
-    }
-
-    // watch.directory_inaccessible (WARN)
-    void LogWatchDirectoryInaccessible(std::string_view watch_dir,
-                                       int errno_code) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"watch_dir", std::string(watch_dir)},
-            {"errno", std::to_string(errno_code)}
-        };
-        LogStructured("watch.directory_inaccessible", "WARN", fields);
-    }
-
-    // watch.filesystem_full (WARN)
-    void LogWatchFilesystemFull(std::string_view watch_dir) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"watch_dir", std::string(watch_dir)}
-        };
-        LogStructured("watch.filesystem_full", "WARN", fields);
-    }
-
-    // db.connection_lost (ERROR)
-    void LogDbConnectionLost(int attempt, int max_attempts) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"attempt", std::to_string(attempt)},
-            {"max_attempts", std::to_string(max_attempts)}
-        };
-        LogStructured("db.connection_lost", "ERROR", fields);
-    }
-
-    // db.deadlock (ERROR)
-    void LogDbDeadlock(std::string_view sequence_id) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)}
-        };
-        LogStructured("db.deadlock", "ERROR", fields);
-    }
-
-    // db.query_failed (ERROR)
-    void LogDbQueryFailed(std::string_view sequence_id,
-                          std::string_view error) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"error", std::string(error)}
-        };
-        LogStructured("db.query_failed", "ERROR", fields);
-    }
-
-    // ─── ExifTool Events ───────────────────────────────────────────────────────
-
-    // exiftool.extraction_failed (ERROR)
-    void LogExifExtractionFailed(std::string_view sequence_id,
-                                 std::string_view source_path,
-                                 std::string_view error,
-                                 bool daemon_restarted) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"source_path", std::string(source_path)},
-            {"error", std::string(error)},
-            {"daemon_restarted", daemon_restarted ? "true" : "false"}
-        };
-        LogStructured("exiftool.extraction_failed", "ERROR", fields);
-    }
-
-    // exiftool.daemon_restarted (WARN)
-    void LogExifToolDaemonRestarted(std::string_view reason,
-                                     int restart_count) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"reason", std::string(reason)},
-            {"restart_count", std::to_string(restart_count)}
-        };
-        LogStructured("exiftool.daemon_restarted", "WARN", fields);
-    }
-
-    // ─── Converter Events ──────────────────────────────────────────────────────
-
-    // converter.engine_unavailable (ERROR)
-    void LogConverterEngineUnavailable(std::string_view engine_name,
-                                       std::string_view reason) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"engine_name", std::string(engine_name)},
-            {"reason", std::string(reason)}
-        };
-        LogStructured("converter.engine_unavailable", "ERROR", fields);
-    }
-
-    // converter.unsupported_format (WARN - skipped, not dead-lettered)
-    void LogConverterUnsupportedFormat(std::string_view sequence_id,
-                                       std::string_view source_path,
-                                       std::string_view extension) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"source_path", std::string(source_path)},
-            {"extension", std::string(extension)},
-            {"action", "skipped"}
-        };
-        LogStructured("converter.unsupported_format", "WARN", fields);
-    }
-
-    // ─── Filesystem Events ─────────────────────────────────────────────────────
-
-    // filesystem.read_error (ERROR)
-    void LogFilesystemReadError(std::string_view sequence_id,
-                                std::string_view path,
-                                int errno_code,
-                                std::string_view operation) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"path", std::string(path)},
-            {"errno", std::to_string(errno_code)},
-            {"operation", std::string(operation)}
-        };
-        LogStructured("filesystem.read_error", "ERROR", fields);
-    }
-
-    // filesystem.write_error (ERROR)
-    void LogFilesystemWriteError(std::string_view sequence_id,
-                                 std::string_view path,
-                                 int errno_code,
-                                 std::string_view operation) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"path", std::string(path)},
-            {"errno", std::to_string(errno_code)},
-            {"operation", std::string(operation)}
-        };
-        LogStructured("filesystem.write_error", "ERROR", fields);
-    }
-
-    // filesystem.archive_failed (ERROR)
-    void LogFilesystemArchiveFailed(std::string_view sequence_id,
-                                    std::string_view source,
-                                    std::string_view dest,
-                                    std::string_view error) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"source", std::string(source)},
-            {"dest", std::string(dest)},
-            {"error", std::string(error)}
-        };
-        LogStructured("filesystem.archive_failed", "ERROR", fields);
-    }
-
-    // ─── Hash Events ───────────────────────────────────────────────────────────
-
-    // hash.verification_failed (ERROR)
-    void LogHashVerificationFailed(std::string_view sequence_id,
-                                   std::string_view expected_hash,
-                                   std::string_view actual_hash,
-                                   std::string_view stage) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"expected_hash", std::string(expected_hash)},
-            {"actual_hash", std::string(actual_hash)},
-            {"stage", std::string(stage)}
-        };
-        LogStructured("hash.verification_failed", "ERROR", fields);
-    }
-
-    // ─── Reconversion Events ───────────────────────────────────────────────────
-
-    // reconversion.lock_failed (WARN)
-    void LogReconversionLockFailed(std::string_view import_id,
-                                   std::string_view holder,
-                                   int age_seconds) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"import_id", std::string(import_id)},
-            {"holder", std::string(holder)},
-            {"age_seconds", std::to_string(age_seconds)}
-        };
-        LogStructured("reconversion.lock_failed", "WARN", fields);
-    }
-
-    // reconversion.source_missing (ERROR)
-    void LogReconversionSourceMissing(std::string_view import_id,
-                                      std::string_view source_dng_path) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"import_id", std::string(import_id)},
-            {"source_dng_path", std::string(source_dng_path)},
-            {"action", "dead_lettered"}
-        };
-        LogStructured("reconversion.source_missing", "ERROR", fields);
-    }
-
-    // ─── Rotation Events ───────────────────────────────────────────────────────
-
-    // rotation.push_failed (ERROR)
-    void LogRotationPushFailed(std::string_view import_id,
-                               std::string_view sink,
-                               std::string_view error) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"import_id", std::string(import_id)},
-            {"sink", std::string(sink)},
-            {"error", std::string(error)}
-        };
-        LogStructured("rotation.push_failed", "ERROR", fields);
-    }
-
-    // ─── Config Events ─────────────────────────────────────────────────────────
-
-    // config.invalid_value (ERROR)
-    void LogConfigInvalidValue(std::string_view key,
-                               std::string_view value,
-                               std::string_view reason) override {
-        // Mask secrets in logged values
-        std::string masked_value = std::string(value);
-        if (masked_value.find("password") != std::string::npos ||
-            masked_value.find("secret") != std::string::npos ||
-            masked_value.find("token") != std::string::npos ||
-            masked_value.find("key") != std::string::npos) {
-            masked_value = "[REDACTED]";
-        }
-        std::unordered_map<std::string, std::string> fields = {
-            {"key", std::string(key)},
-            {"value", masked_value},
-            {"reason", std::string(reason)}
-        };
-        LogStructured("config.invalid_value", "ERROR", fields);
-    }
-
-    // ─── Watch Events ──────────────────────────────────────────────────────────
-
-    // watch.scan_failed (WARN)
-    void LogWatchScanFailed(std::string_view watch_dir,
-                            std::string_view error) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"watch_dir", std::string(watch_dir)},
-            {"error", std::string(error)}
-        };
-        LogStructured("watch.scan_failed", "WARN", fields);
-    }
-
-    // watch.stability_timeout (WARN)
-    void LogWatchStabilityTimeout(std::string_view sequence_id,
-                                  std::string_view path,
-                                  int checks) override {
-        std::unordered_map<std::string, std::string> fields = {
-            {"sequence_id", std::string(sequence_id)},
-            {"path", std::string(path)},
-            {"checks", std::to_string(checks)},
-            {"action", "moved_to_failed"}
-        };
-        LogStructured("watch.stability_timeout", "WARN", fields);
-    }
-
-private:
-    std::string logger_name_;
-    std::string format_;
-    std::shared_ptr<spdlog::logger> logger_;
-
-    // ─── Logger Setup ────────────────────────────────────────────────────────
-
-    void setup_text_logger() {
-        logger_ = spdlog::get(logger_name_);
+        : logger_(spdlog::get(logger_name)) {
         if (!logger_) {
-            auto sink = std::make_shared<spdlog::sinks::stdout_stderr_sink_mt>();
-            logger_ = std::make_shared<spdlog::logger>(logger_name_, sink);
-            logger_->set_level(spdlog::level::info);
-            logger_->flush_on(spdlog::level::err);
+            // Create logger with stdout + stderr sinks (compatible with spdlog 1.9+)
+            auto stdout_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+            auto stderr_sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+
+            std::vector<spdlog::sink_ptr> sinks = {stdout_sink, stderr_sink};
+
+            // Add file sink if path specified
+            if (const char* path = std::getenv("RAWIMPORT_LOG_FILE")) {
+                try {
+                    sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(path, true));
+                } catch (...) {
+                    // Ignore file sink errors
+                }
+            }
+
+            logger_ = std::make_shared<spdlog::logger>(logger_name, sinks.begin(), sinks.end());
             spdlog::register_logger(logger_);
         }
-        // Text pattern: [corr_id] [level] event: message key=val ...
-        logger_->set_pattern("%v");
+
+        // Set pattern based on format
+        std::string fmt = log_format();
+        if (fmt == "json") {
+            logger_->set_pattern("%v"); // JSON formatter handles full output
+        } else {
+            logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
+        }
+
+        logger_->set_level(spdlog::level::trace);
+        logger_->flush_on(spdlog::level::warn);
     }
 
-    void setup_json_logger() {
-        logger_ = spdlog::get(logger_name_ + "_json");
-        if (!logger_) {
-            auto sink = std::make_shared<spdlog::sinks::stdout_stderr_sink_mt>();
-            logger_ = std::make_shared<spdlog::logger>(logger_name_ + "_json", sink);
-            logger_->set_level(spdlog::level::info);
-            logger_->flush_on(spdlog::level::err);
-            // Use raw formatter — we build full JSON ourselves in LogStructured
-            logger_->set_pattern("%v");
-            spdlog::register_logger(logger_);
+    ~Impl() {
+        if (logger_) {
+            logger_->flush();
+            spdlog::drop(logger_->name());
         }
     }
 
-    // ─── Text Logging Helpers ────────────────────────────────────────────────
-
-    void log_text(spdlog::level::level_enum lvl,
-                  const std::string& msg,
-                  const std::map<std::string, std::string>& ctx) {
+    void log_json(std::string_view event, std::string_view level,
+                  const std::unordered_map<std::string, std::string>& fields) {
         std::ostringstream oss;
-        if (!g_correlation_id.empty()) {
-            oss << "[corr:" << g_correlation_id << "] ";
-        }
-        for (const auto& [k, v] : ctx) {
-            oss << k << '=' << v << ' ';
-        }
-        oss << msg;
-        logger_->log(lvl, "{}", oss.str());
-    }
+        oss << '{'
+            << "\"timestamp\":\"" << now_iso8601() << "\","
+            << "\"level\":\"" << level << "\","
+            << "\"event\":\"" << event << "\"";
 
-    void log_text_structured(std::string_view event,
-                             std::string_view level,
-                             const std::unordered_map<std::string, std::string>& fields) {
-        std::ostringstream oss;
         if (!g_correlation_id.empty()) {
-            oss << "[corr:" << g_correlation_id << "] ";
+            oss << ",\"correlation_id\":\"" << g_correlation_id << "\"";
         }
-        oss << '[' << level << "] " << event << ": ";
-        bool first = false;
+
         for (const auto& [k, v] : fields) {
-            if (!first) oss << ", ";
-            oss << k << '=' << v;
-            first = false;
+            oss << ",\"" << k << "\":" << json_escape(v);
         }
-        // Map level string to spdlog level
-        spdlog::level::level_enum lvl = spdlog::level::info;
-        if (level == "TRACE") lvl = spdlog::level::trace;
-        else if (level == "DEBUG") lvl = spdlog::level::debug;
-        else if (level == "WARN") lvl = spdlog::level::warn;
-        else if (level == "ERROR") lvl = spdlog::level::err;
-        else if (level == "CRITICAL") lvl = spdlog::level::critical;
-        logger_->log(lvl, "{}", oss.str());
-    }
-
-    // ─── JSON Logging ────────────────────────────────────────────────────────
-
-    void log_json_structured(std::string_view event,
-                             std::string_view level,
-                             const std::unordered_map<std::string, std::string>& fields) {
-        std::ostringstream oss;
-        oss << '{';
-        oss << "\"timestamp\":" << json_escape(now_iso8601()) << ',';
-        oss << "\"level\":" << json_escape(std::string(level)) << ',';
-        oss << "\"event\":" << json_escape(std::string(event));
-
-        // Fields
-        bool first = false;
-        for (const auto& [k, v] : fields) {
-            if (!first) oss << ',';
-            oss << json_escape(k) << ':' << json_escape(v);
-            first = false;
-        }
-
-        // Correlation ID
-        if (!g_correlation_id.empty()) {
-            if (!first) oss << ',';
-            oss << "\"correlation_id\":" << json_escape(g_correlation_id);
-        }
-
         oss << '}';
-
-        // Map level string to spdlog level for filtering
-        spdlog::level::level_enum lvl = spdlog::level::info;
-        if (level == "TRACE") lvl = spdlog::level::trace;
-        else if (level == "DEBUG") lvl = spdlog::level::debug;
-        else if (level == "WARN") lvl = spdlog::level::warn;
-        else if (level == "ERROR") lvl = spdlog::level::err;
-        else if (level == "CRITICAL") lvl = spdlog::level::critical;
-        logger_->log(lvl, "{}", oss.str());
+        logger_->log(to_spdlog_level(from_string_level(level)), oss.str());
     }
+
+    void log_text(spdlog::level::level_enum lvl, const std::string& msg,
+                  const std::map<std::string, std::string>& ctx) {
+        if (!ctx.empty()) {
+            std::ostringstream oss;
+            oss << msg << " [";
+            bool first = true;
+            for (const auto& [k, v] : ctx) {
+                if (!first) oss << ", ";
+                oss << k << "=" << v;
+                first = false;
+            }
+            oss << "]";
+            logger_->log(lvl, oss.str());
+        } else {
+            logger_->log(lvl, msg);
+        }
+    }
+
+    // Helpers
+    static spdlog::level::level_enum from_string_level(std::string_view lvl) {
+        if (lvl == "trace") return spdlog::level::trace;
+        if (lvl == "debug") return spdlog::level::debug;
+        if (lvl == "info")  return spdlog::level::info;
+        if (lvl == "warn")  return spdlog::level::warn;
+        if (lvl == "error") return spdlog::level::err;
+        if (lvl == "critical") return spdlog::level::critical;
+        return spdlog::level::info;
+    }
+
+    std::shared_ptr<spdlog::logger> logger_;
 };
 
+// ── SpdlogLogSink ─────────────────────────────────────────────────────────────
 SpdlogLogSink::SpdlogLogSink(std::string logger_name)
     : impl_(std::make_unique<Impl>(std::move(logger_name))) {}
 
 SpdlogLogSink::~SpdlogLogSink() = default;
 
 void SpdlogLogSink::LogStructured(std::string_view event,
-                                  std::string_view level,
-                                  const std::unordered_map<std::string, std::string>& fields) {
-    impl_->LogStructured(event, level, fields);
+                                   std::string_view level,
+                                   const std::unordered_map<std::string, std::string>& fields) {
+    impl_->log_json(event, level, fields);
 }
 
 void SpdlogLogSink::SetCorrelationId(std::string_view id) {
-    impl_->SetCorrelationId(id);
+    g_correlation_id = std::string(id);
 }
 
 void SpdlogLogSink::ClearCorrelationId() {
-    impl_->ClearCorrelationId();
+    g_correlation_id.clear();
 }
 
 std::string SpdlogLogSink::correlation_id() {
-    return impl_->correlation_id();
+    return g_correlation_id;
 }
 
-void SpdlogLogSink::trace(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->trace(msg, ctx);
+void SpdlogLogSink::trace(const std::string& msg,
+                          const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::trace, msg, ctx);
 }
-void SpdlogLogSink::debug(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->debug(msg, ctx);
+void SpdlogLogSink::debug(const std::string& msg,
+                          const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::debug, msg, ctx);
 }
-void SpdlogLogSink::info(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->info(msg, ctx);
+void SpdlogLogSink::info(const std::string& msg,
+                         const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::info, msg, ctx);
 }
-void SpdlogLogSink::warn(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->warn(msg, ctx);
+void SpdlogLogSink::warn(const std::string& msg,
+                         const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::warn, msg, ctx);
 }
-void SpdlogLogSink::error(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->error(msg, ctx);
+void SpdlogLogSink::error(const std::string& msg,
+                          const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::err, msg, ctx);
 }
-void SpdlogLogSink::critical(const std::string& msg, const std::map<std::string, std::string>& ctx) {
-    impl_->critical(msg, ctx);
+void SpdlogLogSink::critical(const std::string& msg,
+                             const std::map<std::string, std::string>& ctx) {
+    impl_->log_text(spdlog::level::critical, msg, ctx);
 }
-bool SpdlogLogSink::is_enabled(domain::LogLevel level) { return impl_->is_enabled(level); }
-domain::LogLevel SpdlogLogSink::minimum_level() { return impl_->minimum_level(); }
 
-// Convenience methods — forward to impl
+bool SpdlogLogSink::is_enabled(domain::LogLevel level) {
+    return impl_->logger_->should_log(to_spdlog_level(level));
+}
+
+domain::LogLevel SpdlogLogSink::minimum_level() {
+    return from_spdlog_level(impl_->logger_->level());
+}
+
+// ─── Convenience Methods: Event Taxonomy ──────────────────────────────────────
 void SpdlogLogSink::LogCollisionDuplicateHash(std::string_view sequence_id,
-                                              std::string_view duplicate_of,
-                                              std::string_view source_hash,
-                                              std::string_view duplicate_path) {
-    impl_->LogCollisionDuplicateHash(sequence_id, duplicate_of, source_hash, duplicate_path);
+                                               std::string_view duplicate_of,
+                                               std::string_view source_hash,
+                                               std::string_view duplicate_path) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"duplicate_of", std::string(duplicate_of)},
+        {"source_hash", std::string(source_hash)},
+        {"action", "moved_to_duplicates"},
+        {"duplicate_path", std::string(duplicate_path)}
+    };
+    LogStructured("collision.duplicate_hash", "INFO", fields);
 }
 
 void SpdlogLogSink::LogCollisionDuplicateHashDeadLetter(std::string_view sequence_id,
-                                                        std::string_view duplicate_of) {
-    impl_->LogCollisionDuplicateHashDeadLetter(sequence_id, duplicate_of);
+                                                         std::string_view duplicate_of) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"duplicate_of", std::string(duplicate_of)},
+        {"action", "dead_lettered_to_failed"}
+    };
+    LogStructured("collision.duplicate_hash_dead_letter", "WARN", fields);
 }
 
 void SpdlogLogSink::LogConversionFailedEngineError(std::string_view sequence_id,
-                                                   std::string_view engine_name,
-                                                   int exit_code,
-                                                   std::string_view stderr_tail) {
-    impl_->LogConversionFailedEngineError(sequence_id, engine_name, exit_code, stderr_tail);
+                                                    std::string_view engine_name,
+                                                    int exit_code,
+                                                    std::string_view stderr_tail) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"engine_name", std::string(engine_name)},
+        {"exit_code", std::to_string(exit_code)},
+        {"stderr_tail", std::string(stderr_tail)}
+    };
+    LogStructured("conversion.failed.engine_error", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogImportFailed(std::string_view sequence_id,
-                                    std::string_view reason) {
-    impl_->LogImportFailed(sequence_id, reason);
+                                     std::string_view reason) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"reason", std::string(reason)}
+    };
+    LogStructured("import.failed", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogCollisionDuplicateFound(std::string_view sequence_id,
-                                               std::string_view existing_sequence_id,
-                                               const domain::SHA256Hash& source_hash,
-                                               std::string_view duplicate_path) {
-    impl_->LogCollisionDuplicateFound(sequence_id, existing_sequence_id, source_hash, duplicate_path);
+                                                std::string_view existing_sequence_id,
+                                                const domain::SHA256Hash& source_hash,
+                                                std::string_view duplicate_path) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"existing_sequence_id", std::string(existing_sequence_id)},
+        {"source_hash", domain::sha256_hex(source_hash)},
+        {"duplicate_path", std::string(duplicate_path)}
+    };
+    LogStructured("collision.duplicate_found", "WARN", fields);
 }
 
 void SpdlogLogSink::LogConversionFailedHashMismatch(std::string_view sequence_id,
-                                                    std::string_view source_hash,
-                                                    std::string_view output_hash) {
-    impl_->LogConversionFailedHashMismatch(sequence_id, source_hash, output_hash);
+                                                     std::string_view source_hash,
+                                                     std::string_view output_hash) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"source_hash", std::string(source_hash)},
+        {"output_hash", std::string(output_hash)},
+        {"action", "dead_lettered"}
+    };
+    LogStructured("conversion.failed.hash_mismatch", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogConversionFailedTimeout(std::string_view sequence_id,
-                                               int timeout_sec) {
-    impl_->LogConversionFailedTimeout(sequence_id, timeout_sec);
+                                                int timeout_seconds) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"timeout_seconds", std::to_string(timeout_seconds)},
+        {"action", "dead_lettered"}
+    };
+    LogStructured("conversion.failed.timeout", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogDeadLetterMaxRetries(std::string_view sequence_id,
-                                            int max_retries,
-                                            std::string_view last_error) {
-    impl_->LogDeadLetterMaxRetries(sequence_id, max_retries, last_error);
+                                             int max_retries,
+                                             std::string_view reason) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"max_retries", std::to_string(max_retries)},
+        {"reason", std::string(reason)}
+    };
+    LogStructured("dead_letter.max_retries", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogWatchDirectoryInaccessible(std::string_view watch_dir,
-                                                  int errno_code) {
-    impl_->LogWatchDirectoryInaccessible(watch_dir, errno_code);
+void SpdlogLogSink::LogWatchDirectoryInaccessible(std::string_view path,
+                                                   int error_code) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"path", std::string(path)},
+        {"error_code", std::to_string(error_code)}
+    };
+    LogStructured("watch.directory_inaccessible", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogWatchFilesystemFull(std::string_view watch_dir) {
-    impl_->LogWatchFilesystemFull(watch_dir);
+void SpdlogLogSink::LogWatchFilesystemFull(std::string_view path) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"path", std::string(path)}
+    };
+    LogStructured("watch.filesystem_full", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogDbConnectionLost(int attempt, int max_attempts) {
-    impl_->LogDbConnectionLost(attempt, max_attempts);
+void SpdlogLogSink::LogDbConnectionLost(int consecutive_failures,
+                                         int max_retries) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"consecutive_failures", std::to_string(consecutive_failures)},
+        {"max_retries", std::to_string(max_retries)}
+    };
+    LogStructured("db.connection_lost", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogDbDeadlock(std::string_view sequence_id) {
-    impl_->LogDbDeadlock(sequence_id);
+void SpdlogLogSink::LogDbDeadlock(std::string_view query) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"query", std::string(query)}
+    };
+    LogStructured("db.deadlock", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogDbQueryFailed(std::string_view sequence_id,
-                                     std::string_view error) {
-    impl_->LogDbQueryFailed(sequence_id, error);
+void SpdlogLogSink::LogDbQueryFailed(std::string_view query,
+                                      std::string_view error) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"query", std::string(query)},
+        {"error", std::string(error)}
+    };
+    LogStructured("db.query_failed", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogExifExtractionFailed(std::string_view sequence_id,
-                                            std::string_view source_path,
-                                            std::string_view error,
-                                            bool daemon_restarted) {
-    impl_->LogExifExtractionFailed(sequence_id, source_path, error, daemon_restarted);
+                                             std::string_view source_path,
+                                             std::string_view engine,
+                                             bool is_retry) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"source_path", std::string(source_path)},
+        {"engine", std::string(engine)},
+        {"is_retry", is_retry ? "true" : "false"}
+    };
+    LogStructured("exif.extraction_failed", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogExifToolDaemonRestarted(std::string_view reason,
+void SpdlogLogSink::LogExifToolDaemonRestarted(std::string_view sequence_id,
                                                 int restart_count) {
-    impl_->LogExifToolDaemonRestarted(reason, restart_count);
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"restart_count", std::to_string(restart_count)}
+    };
+    LogStructured("exif.tool_daemon_restarted", "WARN", fields);
 }
 
-void SpdlogLogSink::LogConverterEngineUnavailable(std::string_view engine_name,
-                                                   std::string_view reason) {
-    impl_->LogConverterEngineUnavailable(engine_name, reason);
+void SpdlogLogSink::LogConverterEngineUnavailable(std::string_view sequence_id,
+                                                   std::string_view engine) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"engine", std::string(engine)}
+    };
+    LogStructured("converter.engine_unavailable", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogConverterUnsupportedFormat(std::string_view sequence_id,
-                                                  std::string_view source_path,
-                                                  std::string_view extension) {
-    impl_->LogConverterUnsupportedFormat(sequence_id, source_path, extension);
+                                                   std::string_view source_path,
+                                                   std::string_view format) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"source_path", std::string(source_path)},
+        {"format", std::string(format)}
+    };
+    LogStructured("converter.unsupported_format", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogFilesystemReadError(std::string_view sequence_id,
-                                           std::string_view path,
-                                           int errno_code,
-                                           std::string_view operation) {
-    impl_->LogFilesystemReadError(sequence_id, path, errno_code, operation);
+                                            std::string_view path,
+                                            int error_code,
+                                            std::string_view operation) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"path", std::string(path)},
+        {"error_code", std::to_string(error_code)},
+        {"operation", std::string(operation)}
+    };
+    LogStructured("filesystem.read_error", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogFilesystemWriteError(std::string_view sequence_id,
-                                            std::string_view path,
-                                            int errno_code,
-                                            std::string_view operation) {
-    impl_->LogFilesystemWriteError(sequence_id, path, errno_code, operation);
+                                             std::string_view path,
+                                             int error_code,
+                                             std::string_view operation) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"path", std::string(path)},
+        {"error_code", std::to_string(error_code)},
+        {"operation", std::string(operation)}
+    };
+    LogStructured("filesystem.write_error", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogFilesystemArchiveFailed(std::string_view sequence_id,
-                                               std::string_view source,
-                                               std::string_view dest,
-                                               std::string_view error) {
-    impl_->LogFilesystemArchiveFailed(sequence_id, source, dest, error);
+                                                std::string_view source,
+                                                std::string_view dest,
+                                                std::string_view error) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"source", std::string(source)},
+        {"dest", std::string(dest)},
+        {"error", std::string(error)}
+    };
+    LogStructured("filesystem.archive_failed", "ERROR", fields);
 }
 
 void SpdlogLogSink::LogHashVerificationFailed(std::string_view sequence_id,
-                                              std::string_view expected_hash,
-                                              std::string_view actual_hash,
-                                              std::string_view stage) {
-    impl_->LogHashVerificationFailed(sequence_id, expected_hash, actual_hash, stage);
+                                               std::string_view expected,
+                                               std::string_view actual,
+                                               std::string_view file) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"expected_hash", std::string(expected)},
+        {"actual_hash", std::string(actual)},
+        {"file", std::string(file)}
+    };
+    LogStructured("hash.verification_failed", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogReconversionLockFailed(std::string_view import_id,
-                                              std::string_view holder,
-                                              int age_seconds) {
-    impl_->LogReconversionLockFailed(import_id, holder, age_seconds);
+void SpdlogLogSink::LogReconversionLockFailed(std::string_view sequence_id,
+                                               std::string_view holder,
+                                               int retry_count) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"holder", std::string(holder)},
+        {"retry_count", std::to_string(retry_count)}
+    };
+    LogStructured("reconversion.lock_failed", "WARN", fields);
 }
 
-void SpdlogLogSink::LogReconversionSourceMissing(std::string_view import_id,
-                                                 std::string_view source_dng_path) {
-    impl_->LogReconversionSourceMissing(import_id, source_dng_path);
+void SpdlogLogSink::LogReconversionSourceMissing(std::string_view sequence_id,
+                                                  std::string_view source_path) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"source_path", std::string(source_path)}
+    };
+    LogStructured("reconversion.source_missing", "ERROR", fields);
 }
 
-void SpdlogLogSink::LogRotationPushFailed(std::string_view import_id,
-                                          std::string_view sink,
-                                          std::string_view error) {
-    impl_->LogRotationPushFailed(import_id, sink, error);
-}
-
-void SpdlogLogSink::LogConfigInvalidValue(std::string_view key,
-                                          std::string_view value,
-                                          std::string_view reason) {
-    impl_->LogConfigInvalidValue(key, value, reason);
-}
-
-void SpdlogLogSink::LogWatchScanFailed(std::string_view watch_dir,
-                                       std::string_view error) {
-    impl_->LogWatchScanFailed(watch_dir, error);
-}
-
-void SpdlogLogSink::LogWatchStabilityTimeout(std::string_view sequence_id,
-                                             std::string_view path,
-                                             int checks) {
-    impl_->LogWatchStabilityTimeout(sequence_id, path, checks);
+void SpdlogLogSink::LogRotationPushFailed(std::string_view sequence_id,
+                                           std::string_view target,
+                                           std::string_view error) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"target", std::string(target)},
+        {"error", std::string(error)}
+    };
+    LogStructured("rotation.push_failed", "ERROR", fields);
 }
 
 std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
