@@ -516,6 +516,46 @@ void SpdlogLogSink::LogRotationPushFailed(std::string_view sequence_id,
     LogStructured("rotation.push_failed", "ERROR", fields);
 }
 
+void SpdlogLogSink::LogConfigInvalidValue(std::string_view key,
+                                          std::string_view value,
+                                          std::string_view reason) {
+    // Mask secrets in logged values
+    std::string masked_value = std::string(value);
+    if (masked_value.find("password") != std::string::npos ||
+        masked_value.find("secret") != std::string::npos ||
+        masked_value.find("token") != std::string::npos ||
+        masked_value.find("key") != std::string::npos) {
+        masked_value = "[REDACTED]";
+    }
+    std::unordered_map<std::string, std::string> fields = {
+        {"key", std::string(key)},
+        {"value", masked_value},
+        {"reason", std::string(reason)}
+    };
+    LogStructured("config.invalid_value", "ERROR", fields);
+}
+
+void SpdlogLogSink::LogWatchScanFailed(std::string_view watch_dir,
+                                       std::string_view error) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"watch_dir", std::string(watch_dir)},
+        {"error", std::string(error)}
+    };
+    LogStructured("watch.scan_failed", "WARN", fields);
+}
+
+void SpdlogLogSink::LogWatchStabilityTimeout(std::string_view sequence_id,
+                                             std::string_view path,
+                                             int checks) {
+    std::unordered_map<std::string, std::string> fields = {
+        {"sequence_id", std::string(sequence_id)},
+        {"path", std::string(path)},
+        {"checks", std::to_string(checks)},
+        {"action", "moved_to_failed"}
+    };
+    LogStructured("watch.stability_timeout", "WARN", fields);
+}
+
 std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
     return std::make_shared<SpdlogLogSink>(std::move(logger_name));
 }
