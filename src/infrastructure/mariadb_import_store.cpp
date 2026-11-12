@@ -95,13 +95,10 @@ void MariadbImportStore::drop_(MariadbHandle conn) const {
 }
 
 std::string MariadbImportStore::sql_escape(MariadbHandle conn, const std::string& s) const {
-    // Use parameterized queries in production; this is a simplification.
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '"') out += "\"\"";
-        else out += c;
-    }
-    out += "\"";
+    // Use mariadb_escape_string for proper SQL escaping
+    std::string out(s.size() * 2 + 1, '\0');
+    size_t len = mariadb_escape_string(conn, &out[0], s.c_str(), s.size());
+    out.resize(len);
     return out;
 }
 
@@ -498,6 +495,7 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON,"
         "    `status` ENUM('pending','converting','completed','failed','restored','legacy') DEFAULT 'pending',"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `error_message` TEXT,"
         "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
@@ -538,6 +536,7 @@ bool MariadbImportStore::init_schema() {
         ") ENGINE=InnoDB",
         "CREATE INDEX IF NOT EXISTS `idx_locks_import_id` ON `locks`(`import_id`)",
         "CREATE INDEX IF NOT EXISTS `idx_locks_expires` ON `locks`(`expires_at`)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS `uq_locks_import_id_active` ON `locks`(`import_id`) WHERE `released_at` IS NULL",
         // alerts
         "CREATE TABLE IF NOT EXISTS `alerts` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"

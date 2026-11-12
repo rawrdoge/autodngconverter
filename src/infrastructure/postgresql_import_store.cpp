@@ -104,10 +104,6 @@ std::string PostgresqlImportStore::pg_error_(PGconn* conn) const {
     return pg_error(conn);
 }
 
-std::string PostgresqlImportStore::sql_escape(const std::string& s) const {
-    return "\"" + s + "\""; // simplified — use prepared statements in prod
-}
-
 // ── imports ───────────────────────────────────────────────────────────────────
 std::optional<int64_t> PostgresqlImportStore::create_import(const domain::ImportRecord& rec) {
     auto conn = connect_();
@@ -117,7 +113,7 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
     sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
-           " source_fingerprint_size, source_fingerprint_mtime_epoch, source_fingerprint_fnv1a,"
+           " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
            << " VALUES ('" << pg_escape(conn, rec.source_path.native) << "',"
            << "'" << source_hash_hex << "',"
@@ -323,76 +319,72 @@ std::vector<domain::Alert> PostgresqlImportStore::list_alerts(std::optional<int6
 std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    // Use pg_try_advisory_lock for coordination during lock record creation.
-    // The advisory lock is session-scoped and will be held until release_lock is called.
-    int lock_arg = static_cast<int>(import_id & 0x7FFFFFFF);
-    std::string lock_arg_str = std::to_string(lock_arg);
-    const char* params1[1] = {lock_arg_str.c_str()};
 
-    PGresult* res = PQexecParams(conn,
-        "SELECT pg_try_advisory_lock($1)", 1,
-        nullptr, params1, nullptr, nullptr, 0);
-    bool acquired = (PQresultStatus(res) == PGRES_TUPLES_OK &&
-                     PQgetvalue(res, 0, 0)[0] == 't');
-    PQclear(res);
-    if (!acquired) {
-        drop_(conn);
-        return std::nullopt;
+    // Use a transaction to atomically check for existing lock and insert new one.
+    // The locks table has a partial unique index on import_id WHERE released_at IS NULL.
+    PGresult* res = PQexec(conn, "BEGIN");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        PQclear(res); drop_(conn); return std::nullopt;
     }
-    // Insert lock record with expiration (1 hour from now).
+    PQclear(res);
+
     std::string import_id_str = std::to_string(import_id);
     std::string holder_str = pg_escape(conn, holder);
     std::string acquired_str = timestamp_now();
-    // expires_at = acquired_at + 1 hour (3600 seconds)
-    std::string expires_str = timestamp_now(); // simplified - in production add interval
+    // expires_at = acquired_at + 1 hour
+    std::string expires_str = "NOW() + INTERVAL '1 hour'";
 
-    const char* params2[4] = {import_id_str.c_str(), holder_str.c_str(), acquired_str.c_str(), expires_str.c_str()};
+    const char* params[3] = {import_id_str.c_str(), holder_str.c_str(), acquired_str.c_str()};
 
+    // Try to insert lock. The partial unique index on (import_id) WHERE released_at IS NULL
+    // will prevent duplicate active locks for the same import_id.
     res = PQexecParams(conn,
-        "INSERT INTO locks (import_id, holder, acquired_at, expires_at) VALUES ($1,$2,$3,$4) RETURNING id",
-        4, nullptr, params2, nullptr, nullptr, 0);
+        "INSERT INTO locks (import_id, holder, acquired_at, expires_at) "
+        "VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') "
+        "ON CONFLICT (import_id) WHERE released_at IS NULL DO NOTHING "
+        "RETURNING id",
+        3, nullptr, params, nullptr, nullptr, 0);
+
+    bool ok = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
     int64_t lock_id = -1;
-    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
+    if (ok) {
         lock_id = std::atoll(PQgetvalue(res, 0, 0));
+    }
     PQclear(res);
-    // Keep the advisory lock until release_lock is called.
+
+    if (!ok) {
+        // Lock acquisition failed (conflict)
+        PQexec(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
+
+    // Commit the transaction - the lock record is now persisted.
+    // The lock is held by the database record, not by a session-scoped advisory lock.
+    res = PQexec(conn, "COMMIT");
+    bool committed = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    PQclear(res);
     drop_(conn);
+
+    if (!committed) return std::nullopt;
     return lock_id;
 }
 
 bool PostgresqlImportStore::release_lock(int64_t lock_id) {
     auto conn = connect_();
     if (!conn) return false;
-    // First, get the import_id for the advisory lock
-    std::string lock_id_str = std::to_string(lock_id);
-    const char* params_lock[1] = {lock_id_str.c_str()};
-    PGresult* res = PQexecParams(conn,
-        "SELECT import_id FROM locks WHERE id=$1 AND released_at IS NULL",
-        1, nullptr, params_lock, nullptr, nullptr, 0);
-    int64_t import_id = -1;
-    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
-        import_id = std::atoll(PQgetvalue(res, 0, 0));
-    }
-    PQclear(res);
 
-    // Release the session-scoped advisory lock
-    if (import_id >= 0) {
-        int lock_arg = static_cast<int>(import_id & 0x7FFFFFFF);
-        std::string lock_arg_str = std::to_string(lock_arg);
-        const char* params_adv[1] = {lock_arg_str.c_str()};
-        res = PQexecParams(conn,
-            "SELECT pg_advisory_unlock($1)", 1,
-            nullptr, params_adv, nullptr, nullptr, 0);
-        PQclear(res);
-    }
+    std::string lock_id_str = std::to_string(lock_id);
+    const char* params[1] = {lock_id_str.c_str()};
 
     // Mark lock as released in the database
-    res = PQexecParams(conn,
+    PGresult* res = PQexecParams(conn,
         "UPDATE locks SET released_at=NOW() WHERE id=$1 AND released_at IS NULL",
         1, nullptr,
-        params_lock, nullptr, nullptr, 0);
-    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
-    PQclear(res); drop_(conn);
+        params, nullptr, nullptr, 0);
+    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK && std::atoi(PQcmdTuples(res)) > 0);
+    PQclear(res);
+    drop_(conn);
     return ok;
 }
 
@@ -477,6 +469,7 @@ bool PostgresqlImportStore::init_schema() {
         "    conversion_settings JSONB,"
         "    status VARCHAR(32) NOT NULL DEFAULT 'pending',"
         "    created_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    started_at TIMESTAMPTZ,"
         "    completed_at TIMESTAMPTZ,"
         "    error_message TEXT,"
         "    last_preview_edit_at TIMESTAMPTZ,"
@@ -518,6 +511,7 @@ bool PostgresqlImportStore::init_schema() {
         "CREATE INDEX IF NOT EXISTS idx_locks_import_id ON locks(import_id)",
         "CREATE INDEX IF NOT EXISTS idx_locks_expires ON locks(expires_at)",
         "CREATE INDEX IF NOT EXISTS idx_locks_released ON locks(released_at) WHERE released_at IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_locks_import_id_active ON locks(import_id) WHERE released_at IS NULL",
         // alerts
         "CREATE TABLE IF NOT EXISTS alerts ("
         "    id BIGSERIAL PRIMARY KEY,"

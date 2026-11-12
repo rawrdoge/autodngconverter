@@ -87,7 +87,6 @@ private:
     PGconn* connect_() const;
     void    drop_(PGconn* conn) const;
     std::string pg_error_(PGconn* conn) const;
-    std::string sql_escape(PGconn* conn, const std::string& s) const;
 };
 
 } // namespace rawimport::infrastructure

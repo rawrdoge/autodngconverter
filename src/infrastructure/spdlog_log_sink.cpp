@@ -22,6 +22,9 @@
 
 namespace rawimport::infrastructure {
 
+// Forward declare the nested Impl class
+class SpdlogLogSink::Impl;
+
 namespace {
 
 // Thread-local correlation ID.
@@ -103,9 +106,9 @@ std::string log_format() {
 
 } // anon
 
-class SpdlogLogSinkImpl : public domain::LogSink {
+class SpdlogLogSink::Impl : public domain::LogSink {
 public:
-    explicit SpdlogLogSinkImpl(std::string logger_name)
+    explicit Impl(std::string logger_name)
         : logger_name_(std::move(logger_name)), format_(log_format()) {
         if (format_ == "json") {
             setup_json_logger();
@@ -623,7 +626,7 @@ private:
 };
 
 SpdlogLogSink::SpdlogLogSink(std::string logger_name)
-    : impl_(std::make_unique<SpdlogLogSinkImpl>(std::move(logger_name))) {}
+    : impl_(std::make_unique<Impl>(std::move(logger_name))) {}
 
 SpdlogLogSink::~SpdlogLogSink() = default;
 

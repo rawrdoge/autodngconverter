@@ -25,14 +25,28 @@ DnglabConverterEngine::DnglabConverterEngine() : max_workers_(8) {}
 DnglabConverterEngine::~DnglabConverterEngine() = default;
 
 domain::HealthReport DnglabConverterEngine::health_check() {
-#ifdef WITH_DNGLAB
-    return {domain::HealthStatus::Healthy, "dnglab library available", domain::now()};
-#else
-    // Check for binary in PATH as fallback.
-    const char* path_env = std::getenv("PATH");
-    if (!path_env) return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
-    return {domain::HealthStatus::Degraded, "dnglab C++ library unavailable, using CLI mode", domain::now()};
-#endif
+    // Try to instantiate the dnglab library converter to verify it's available at runtime.
+    // If the library is linked but fails to initialize, we'll fall back to CLI mode.
+    try {
+        dnglab::Converter converter;
+        // If construction succeeds, the library is available
+        return {domain::HealthStatus::Healthy, "dnglab library available", domain::now()};
+    } catch (...) {
+        // Library not available at runtime; check for CLI binary as fallback
+        const char* path_env = std::getenv("PATH");
+        if (!path_env) {
+            return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
+        }
+        std::istringstream ss(path_env);
+        std::string dir;
+        while (std::getline(ss, dir, ':')) {
+            auto p = std::filesystem::path(dir) / "dnglab";
+            if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
+                return {domain::HealthStatus::Degraded, "dnglab C++ library unavailable, CLI binary found", domain::now()};
+            }
+        }
+        return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
+    }
 }
 
 std::vector<std::string> DnglabConverterEngine::supported_extensions() {
@@ -46,7 +60,7 @@ int  DnglabConverterEngine::max_parallel_workers() { return max_workers_; }
 std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::FilePath& source,
                                                                 const domain::FilePath& dest,
                                                                 const domain::ConversionSettings& settings) {
-#ifdef WITH_DNGLAB
+    // Try library conversion first
     try {
         dnglab::Converter converter;
         dnglab::ConvertOptions opts;
@@ -59,11 +73,8 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
         const auto result = converter.convert(source.native, dest.native, opts);
         if (result.success) return dest;
     } catch (...) {
-        // Fall through to binary fallback
+        // Fall through to CLI fallback
     }
-
-    // Fall through to CLI fallback if library conversion fails
-#endif
 
     // CLI fallback: invoke dnglab binary if available.
     const char* path_env = std::getenv("PATH");

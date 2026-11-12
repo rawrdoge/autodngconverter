@@ -1,0 +1,60 @@
+name: Build Validation
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main", "pr/hex-v2" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-minimal:
+    name: Build & Test (minimal)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make libssl-dev
+      - name: Configure
+        run: cmake -S . -B build -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=OFF -DWITH_MARIADB=OFF -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=OFF -DWITH_IMMICH=OFF -DWITH_SPDLOG=OFF -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  build-feature-flags:
+    name: Build feature flags (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: postgresql
+            deps: libpq-dev libssl-dev
+            flags: -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=ON -DWITH_MARIADB=OFF -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=OFF -DWITH_IMMICH=OFF -DWITH_SPDLOG=OFF -DBUILD_TESTING=ON
+          - name: mariadb
+            deps: libmariadb-dev libssl-dev
+            flags: -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=OFF -DWITH_MARIADB=ON -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=OFF -DWITH_IMMICH=OFF -DWITH_SPDLOG=OFF -DBUILD_TESTING=ON
+          - name: exiftool-spdlog-immich
+            deps: libssl-dev libspdlog-dev libcurl4-openssl-dev exiftool
+            flags: -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=OFF -DWITH_MARIADB=OFF -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=ON -DWITH_IMMICH=ON -DWITH_SPDLOG=ON -DBUILD_TESTING=ON
+          - name: migration
+            deps: libpq-dev libmariadb-dev libssl-dev
+            flags: -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=ON -DWITH_MARIADB=ON -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=OFF -DWITH_IMMICH=OFF -DWITH_SPDLOG=OFF -DBUILD_TESTING=ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make ${{ matrix.deps }}
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.flags }}
+      - name: Build
+        run: cmake --build build -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

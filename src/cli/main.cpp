@@ -121,6 +121,10 @@ std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
 #include "infrastructure/exiftool_daemon_exif_extractor.hpp"
 #endif
 
+#ifdef WITH_IMMICH
+#include "infrastructure/immich_rotation_sink.hpp"
+#endif
+
 #if defined(WITH_DNGLAB) || defined(WITH_ADOBE_DNG)
 #include "infrastructure/factories/converter_factory.hpp"
 #endif
@@ -387,7 +391,7 @@ int run_application(int argc, char** argv) {
         log->info("Configuring Immich RotationSink", {{"base_url", immich_url}});
         rotation_sink = std::make_unique<ImmichRotationSink>(immich_url, immich_key);
         auto rot_health = rotation_sink->health_check();
-        if (rot_health.status == HealthStatus::Unhealthy) {
+        if (rot_health.status == domain::HealthStatus::Unhealthy) {
             log->warn("Immich rotation sink health check failed: " + rot_health.message);
         }
 #else
