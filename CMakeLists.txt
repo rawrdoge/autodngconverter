@@ -124,6 +124,7 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
       src/infrastructure/migration_runner.cpp
       src/infrastructure/migration_runner.hpp
     )
+    set(HAVE_MIGRATION 1 CACHE INTERNAL "Migration enabled")
     add_compile_definitions(HAVE_MIGRATION)
   endif()
 
