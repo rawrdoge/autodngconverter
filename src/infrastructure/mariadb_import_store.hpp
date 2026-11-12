@@ -13,9 +13,9 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque MariaDB connection handle.
-struct st_mariadb;
-using MariadbHandle = st_mariadb*;
+// Opaque MariaDB connection handle (use MySQL C API types).
+#include <mariadb/mysql.h>
+using MariadbHandle = MYSQL*;
 
 namespace rawimport::infrastructure {
 

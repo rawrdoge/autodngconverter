@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <iostream>
+#include <cstring>
 
 namespace rawimport::infrastructure {
 
