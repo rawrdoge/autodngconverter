@@ -13,10 +13,8 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque libpq connection (defined in libpq-fe.h).
-#ifdef WITH_POSTGRESQL
-#include <libpq-fe.h>
-#endif
+// Opaque libpq connection (forward declaration; libpq-fe.h included in .cpp).
+struct PGconn;
 
 namespace rawimport::infrastructure {
 
