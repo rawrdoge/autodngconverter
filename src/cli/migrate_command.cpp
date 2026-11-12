@@ -62,7 +62,7 @@ bool parse_migrate_args(int argc, char* argv[], migration::MigrationOptions& opt
         else if (strcmp(arg, "--to") == 0 && i + 1 < argc) {
             if (strcmp(argv[++i], "mariadb") == 0) opts.to = migration::TargetDB::MariaDB;
             else if (strcmp(argv[i], "postgresql") == 0) opts.to = migration::TargetDB::PostgreSQL;
-            else { error_msg = "Invalid target DB: " + std::to_string(argv[i]); return false; }
+            else { error_msg = "Invalid target DB: " + std::string(argv[i]); return false; }
         }
         else if (strcmp(arg, "--source-dsn") == 0 && i + 1 < argc) opts.source_dsn = argv[++i];
         else if (strcmp(arg, "--target-dsn") == 0 && i + 1 < argc) opts.target_dsn = argv[++i];
@@ -94,8 +94,8 @@ void print_migrate_usage() {
               << "  --batch-size N            Rows per batch (default 5000)\n"
               << "  --from mariadb|postgresql Source database type\n"
               << "  --to mariadb|postgresql   Target database type\n"
-              << "  --source-dsn " << "\\"<connection-string>\\" Source DB connection\n"
-              << "  --target-dsn " << "\\"<connection-string>\\" Target DB connection\n"
+              << "  --source-dsn \"<connection-string>\" Source DB connection\n"
+              << "  --target-dsn \"<connection-string>\" Target DB connection\n"
               << "\n"
               << "Guided mode (interactive):\n"
               << "  rawimport migrate --guide\n"

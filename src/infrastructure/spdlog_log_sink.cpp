@@ -7,7 +7,6 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
-#include <spdlog/formatters.h>
 #include <spdlog/pattern_formatter.h>
 
 #include <algorithm>
