@@ -14,6 +14,7 @@
 #include "domain/ports/import_store.hpp"
 
 // Opaque libpq connection (defined in libpq-fe.h).
+#include <libpq-fe.h>
 
 namespace rawimport::infrastructure {
 
