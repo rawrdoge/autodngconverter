@@ -9,6 +9,7 @@
 #include <sstream>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
 
 namespace rawimport::infrastructure {
 
@@ -142,9 +143,11 @@ std::optional<domain::ImportRecord> PostgresqlImportStore::get_import(int64_t id
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
+    std::string id_str = std::to_string(id);
+    const char* params[1] = {id_str.c_str()};
     PGresult* res = PQexecParams(conn,
         "SELECT * FROM imports WHERE sequence_id=$1", 1,
-        nullptr, &id, nullptr, nullptr, 0);
+        nullptr, params, nullptr, nullptr, 0);
     if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
         PQclear(res); drop_(conn); return std::nullopt;
     }
@@ -164,9 +167,10 @@ std::optional<domain::ImportRecord> PostgresqlImportStore::find_import_by_source
     if (!conn) return std::nullopt;
 
     std::string hash_hex = domain::sha256_hex(hash);
+    const char* params[1] = {hash_hex.c_str()};
     PGresult* res = PQexecParams(conn,
         "SELECT * FROM imports WHERE source_hash=$1 LIMIT 1", 1,
-        nullptr, &hash_hex, nullptr, nullptr, 0);
+        nullptr, params, nullptr, nullptr, 0);
     if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
         PQclear(res); drop_(conn); return std::nullopt;
     }
