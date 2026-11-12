@@ -165,7 +165,7 @@ public:
             oss << ",\"" << k << "\":" << json_escape(v);
         }
         oss << '}';
-        logger_->log(to_spdlog_level(from_string_level(level)), oss.str());
+        logger_->log(from_string_level(level), oss.str());
     }
 
     void log_text(spdlog::level::level_enum lvl, const std::string& msg,
