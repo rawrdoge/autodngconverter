@@ -10,9 +10,9 @@
 #include <unordered_map>
 #include <string_view>
 
-struct spdlog_logger; // opaque forward
+#include "domain/ports/log_sink.hpp"
 
-namespace rawimport::domain { class LogSink; }
+struct spdlog_logger; // opaque forward
 
 namespace rawimport::infrastructure {
 
