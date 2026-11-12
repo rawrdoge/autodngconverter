@@ -72,7 +72,7 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
     find_package(PostgreSQL REQUIRED)
     add_compile_definitions(WITH_POSTGRESQL)
     list(APPEND INFRA_SOURCES src/infrastructure/postgresql_import_store.cpp)
-    list(APPEND INFRA_DEPS PostgreSQL::Libpq)
+    list(APPEND INFRA_DEPS PostgreSQL::PostgreSQL)
   endif()
 
   if(WITH_DNGLAB)
