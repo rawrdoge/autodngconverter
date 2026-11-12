@@ -3,9 +3,9 @@
  */
 #ifdef WITH_POSTGRESQL
 
+#include <libpq-fe.h>
 #include "infrastructure/postgresql_import_store.hpp"
 
-#include <libpq-fe.h>
 #include <sstream>
 #include <cstring>
 #include <cstdlib>
