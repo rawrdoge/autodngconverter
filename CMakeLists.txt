@@ -114,7 +114,6 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   if(WITH_SPDLOG)
     find_package(spdlog REQUIRED)
     add_compile_definitions(WITH_SPDLOG)
-    list(APPEND INFRA_SOURCES src/infrastructure/spdlog_log_sink.cpp)
     if(TARGET spdlog::spdlog)
       list(APPEND INFRA_DEPS spdlog::spdlog)
     endif()
@@ -209,6 +208,7 @@ if(BUILD_TESTING)
     target_link_libraries(migration_test PRIVATE infrastructure)
     add_test(NAME migration_tests COMMAND migration_test)
   endif()
+
   # Always define migration_test when BUILD_TESTING=ON so it is discoverable
   # in CI even when DB drivers are unavailable.
   # Conditional linking above ensures it only links DB deps when both drivers are present.
@@ -219,6 +219,11 @@ if(BUILD_TESTING)
     add_test(NAME migration_tests COMMAND migration_test)
   endif()
 endif()
+
+# ============================================================================
+# build-test target - builds all test targets
+# ============================================================================
+add_custom_target(build-test
   COMPONENT port_interface_test
   COMPONENT infra_test
   COMPONENT converter_factory_test
