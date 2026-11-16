@@ -80,10 +80,32 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
     if (values[20]) r.source_fingerprint.fnv1a = std::atoll(values[20]);
-    r.created_at       = domain::now();
-    r.started_at       = domain::now();
-    r.completed_at     = domain::now();
+    // Timestamps: created_at (16), started_at (17), completed_at (18)
+    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS+TZ"
+    r.created_at       = values[16] ? parse_pg_timestamp(values[16]) : domain::now();
+    r.started_at       = values[17] ? parse_pg_timestamp(values[17]) : domain::Instant{};
+    r.completed_at     = values[18] ? parse_pg_timestamp(values[18]) : domain::Instant{};
     return r;
+}
+
+// Parse PostgreSQL TIMESTAMPTZ string to time_point
+static domain::Instant parse_pg_timestamp(const char* str) {
+    if (!str || !*str) return domain::Instant{};
+    struct tm tm{};
+    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS[.us]+TZ" or "YYYY-MM-DD HH:MM:SS+TZ"
+    // We'll parse the main part and ignore microseconds and timezone for simplicity
+    int year, month, day, hour, min, sec;
+    if (sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = 0;
+        return std::chrono::system_clock::from_time_t(timegm(&tm));
+    }
+    return domain::Instant{};
 }
 
 } // anon
