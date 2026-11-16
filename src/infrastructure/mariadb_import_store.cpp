@@ -131,9 +131,14 @@ static std::string timestamp_now() {
 }
 
 // Parse IMPORTS row into ImportRecord.
+// MariaDB imports table has 22 columns (0-21): id, sequence_id, source_path, source_hash,
+// output_path, output_hash, camera_model, capture_date, capture_time, date_source,
+// folder_schema, conversion_settings, status, created_at, started_at, completed_at,
+// error_message, last_preview_edit_at, orientation, source_fingerprint_size,
+// source_fingerprint_mtime, source_fingerprint_fnv1a
 domain::ImportRecord row_to_import(MYSQL_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
-    if (!row || ncols < 14) return r;
+    if (!row || ncols < 22) return r;
     r.sequence_id      = atoll(row[1]);  // sequence_id is column 2
     r.source_path.native = row[2] ? row[2] : "";
     // source_hash is column 4 (index 3)
@@ -151,19 +156,19 @@ domain::ImportRecord row_to_import(MYSQL_ROW row, unsigned int ncols) {
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = static_cast<domain::ImportStatus>(row[6] ? std::atoi(row[6]) : 0);  // status is column 7
-    r.error_message    = row[7] ? row[7] : "";  // error_message is column 8
-    // source_fingerprint columns (9, 10, 11 - indices 8, 9, 10)
-    if (row[8]) r.source_fingerprint.size_bytes = atoll(row[8]);
-    if (row[9]) {
-        auto secs = atoll(row[9]);
+    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
+    r.error_message    = row[16] ? row[16] : "";  // error_message is column 17
+    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
+    if (row[19]) r.source_fingerprint.size_bytes = atoll(row[19]);
+    if (row[20]) {
+        auto secs = atoll(row[20]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (row[10]) r.source_fingerprint.fnv1a = atoll(row[10]);
-    // Timestamps: created_at (11), started_at (12), completed_at (13)
-    r.created_at       = parse_mysql_timestamp(row[11]);
-    r.started_at       = parse_mysql_timestamp(row[12]);
-    r.completed_at     = parse_mysql_timestamp(row[13]);
+    if (row[21]) r.source_fingerprint.fnv1a = atoll(row[21]);
+    // Timestamps: created_at (14), started_at (15), completed_at (16) - indices 13, 14, 15
+    r.created_at       = parse_mysql_timestamp(row[13]);
+    r.started_at       = parse_mysql_timestamp(row[14]);
+    r.completed_at     = parse_mysql_timestamp(row[15]);
     return r;
 }
 
