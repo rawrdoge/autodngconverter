@@ -90,6 +90,7 @@ RAWIMPORT_DB_DRIVER=mariadb rawimport migrate --guide
 | `GET` | `/ready` | Readiness (verifies DB connectivity) |
 
 Re-convert body:
+
 ```json
 {
   "conversion_settings": {
@@ -104,15 +105,25 @@ Re-convert body:
 }
 ```
 
-## Darktable Plugin
-
-Install `tools/betterembeds.lua` as a Darktable Lua script, set `RAWIMPORT_API_URL` near the top (base URL, no `/api/v1` suffix).
-
 ## Build (C++)
 
 ```bash
 mkdir build && cd build && cmake .. -DWITH_DNGLAB=ON -DBUILD_TESTING=ON && make -j$(nproc) && ctest
 ```
+
+## CI/CD Build Validation
+
+![Build Status](https://github.com/rawrdoge/autodngconverter/actions/workflows/build.yml/badge.svg?branch/main)
+
+_Automated matrix builds for PostgreSQL, MariaDB, and EXIFTOOL+SPDLOG+IMMICH configurations._
+
 ## License
 
 MIT. See `LICENSE`, `NOTICE`.
+
+## Contributing
+
+1. Create a feature branch from `main`
+2. Ensure CI passes with `ctest --output-on-failure`
+3. Add migration test coverage when adding new DB-related features
+4. Follow the hexagonal architecture patterns established in the codebase

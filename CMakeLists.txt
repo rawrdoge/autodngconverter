@@ -204,33 +204,30 @@ if(BUILD_TESTING)
   add_test(NAME converter_factory_tests COMMAND converter_factory_test)
 
   # Migration tests (need both DB drivers with libraries found).
-  if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
-    add_executable(migration_test tests/migration/migration_test.cpp)
-    set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-    target_include_directories(migration_test PRIVATE include src tests)
-    target_link_libraries(migration_test PRIVATE infrastructure)
-    add_test(NAME migration_tests COMMAND migration_test)
-  endif()
+    if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
+      add_executable(migration_test tests/migration/migration_test.cpp)
+      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
+      target_include_directories(migration_test PRIVATE include src tests)
+      target_link_libraries(migration_test PRIVATE infrastructure)
+      add_test(NAME migration_tests COMMAND migration_test)
+    endif()
 
-  # Always define migration_test when BUILD_TESTING=ON so it is discoverable
-  # in CI even when DB drivers are unavailable.
-  # Conditional linking above ensures it only links DB deps when both drivers are present.
-  if(BUILD_TESTING AND NOT (MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND))
-    add_executable(migration_test tests/migration/migration_test.cpp)
-    set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-    target_include_directories(migration_test PRIVATE include src tests)
-    add_test(NAME migration_tests COMMAND migration_test)
-  endif()
-endif()
+    # Always define migration_test when BUILD_TESTING=ON so it is discoverable
+    # in CI even when DB drivers are unavailable.
+    # Conditional linking above ensures it only links DB deps when both drivers are present.
+    if(BUILD_TESTING AND NOT (MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND))
+      add_executable(migration_test tests/migration/migration_test.cpp)
+      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
+      target_include_directories(migration_test PRIVATE include src tests)
+      add_test(NAME migration_tests COMMAND migration_test)
+    endif()
 
-# ============================================================================
-# build-test target - builds all test targets
-# ============================================================================
-add_custom_target(build-test
-  COMPONENT port_interface_test
-  COMPONENT infra_test
-  COMPONENT converter_factory_test
-  COMPONENT migration_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  COMMENT "Build all test targets"
-)
+    # ============================================================================
+    # build-test target - builds all test targets
+    # ============================================================================
+    add_custom_target(build-test
+      DEPENDS domain_types_test port_interface_test infra_test converter_factory_test migration_test
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+      COMMENT "Build all test targets"
+    )
+  endif()
