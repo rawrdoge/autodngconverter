@@ -49,6 +49,26 @@ std::string timestamp_now() {
     return std::string(buf);
 }
 
+// Parse PostgreSQL TIMESTAMPTZ string to time_point
+static domain::Instant parse_pg_timestamp(const char* str) {
+    if (!str || !*str) return domain::Instant{};
+    struct tm tm{};
+    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS[.us]+TZ" or "YYYY-MM-DD HH:MM:SS+TZ"
+    // We'll parse the main part and ignore microseconds and timezone for simplicity
+    int year, month, day, hour, min, sec;
+    if (sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = 0;
+        return std::chrono::system_clock::from_time_t(timegm(&tm));
+    }
+    return domain::Instant{};
+}
+
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
     // imports table has 22 columns (0-21): id, sequence_id, source_path, source_hash,
@@ -91,26 +111,6 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
     r.started_at       = values[14] ? parse_pg_timestamp(values[14]) : domain::Instant{};
     r.completed_at     = values[15] ? parse_pg_timestamp(values[15]) : domain::Instant{};
     return r;
-}
-
-// Parse PostgreSQL TIMESTAMPTZ string to time_point
-static domain::Instant parse_pg_timestamp(const char* str) {
-    if (!str || !*str) return domain::Instant{};
-    struct tm tm{};
-    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS[.us]+TZ" or "YYYY-MM-DD HH:MM:SS+TZ"
-    // We'll parse the main part and ignore microseconds and timezone for simplicity
-    int year, month, day, hour, min, sec;
-    if (sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
-        tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
-        tm.tm_mday = day;
-        tm.tm_hour = hour;
-        tm.tm_min = min;
-        tm.tm_sec = sec;
-        tm.tm_isdst = 0;
-        return std::chrono::system_clock::from_time_t(timegm(&tm));
-    }
-    return domain::Instant{};
 }
 
 } // anon
