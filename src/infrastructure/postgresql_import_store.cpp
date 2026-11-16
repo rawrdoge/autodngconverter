@@ -533,6 +533,8 @@ bool PostgresqlImportStore::init_schema() {
         "    conversion_settings JSONB NOT NULL,"
         "    reason TEXT,"
         "    triggered_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    scheduled_at TIMESTAMPTZ,"
+        "    started_at TIMESTAMPTZ,"
         "    completed_at TIMESTAMPTZ,"
         "    status VARCHAR(32) NOT NULL DEFAULT 'pending',"
         "    error_message TEXT"

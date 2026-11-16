@@ -577,6 +577,8 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON NOT NULL,"
         "    `reason` TEXT,"
         "    `triggered_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `scheduled_at` TIMESTAMP NULL DEFAULT NULL,"
+        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',"
         "    `error_message` TEXT"
