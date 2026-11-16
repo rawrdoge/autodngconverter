@@ -51,7 +51,12 @@ std::string timestamp_now() {
 
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
-    if (!values || nfields < 21) return r;
+    // imports table has 22 columns (0-21): id, sequence_id, source_path, source_hash,
+    // output_path, output_hash, camera_model, capture_date, capture_time, date_source,
+    // folder_schema, conversion_settings, status, created_at, started_at, completed_at,
+    // error_message, last_preview_edit_at, orientation, source_fingerprint_size,
+    // source_fingerprint_mtime, source_fingerprint_fnv1a
+    if (!values || nfields < 22) return r;
     r.sequence_id      = values[1] ? std::atoll(values[1]) : -1;  // sequence_id is column 2
     r.source_path.native = values[2] ? values[2] : "";
     // source_hash is column 4 (index 3)
@@ -72,19 +77,19 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
     }
     r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
                                    : domain::ImportStatus::Queued;  // status is column 13
-    r.error_message    = values[15] ? values[15] : "";  // error_message is column 16
-    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
-    if (values[18]) r.source_fingerprint.size_bytes = std::atoll(values[18]);
-    if (values[19]) {
-        auto secs = std::atoll(values[19]);
+    r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
+    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
+    if (values[19]) r.source_fingerprint.size_bytes = std::atoll(values[19]);
+    if (values[20]) {
+        auto secs = std::atoll(values[20]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (values[20]) r.source_fingerprint.fnv1a = std::atoll(values[20]);
-    // Timestamps: created_at (16), started_at (17), completed_at (18)
+    if (values[21]) r.source_fingerprint.fnv1a = std::atoll(values[21]);
+    // Timestamps: created_at (14), started_at (15), completed_at (16) - indices 13, 14, 15
     // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS+TZ"
-    r.created_at       = values[16] ? parse_pg_timestamp(values[16]) : domain::now();
-    r.started_at       = values[17] ? parse_pg_timestamp(values[17]) : domain::Instant{};
-    r.completed_at     = values[18] ? parse_pg_timestamp(values[18]) : domain::Instant{};
+    r.created_at       = values[13] ? parse_pg_timestamp(values[13]) : domain::now();
+    r.started_at       = values[14] ? parse_pg_timestamp(values[14]) : domain::Instant{};
+    r.completed_at     = values[15] ? parse_pg_timestamp(values[15]) : domain::Instant{};
     return r;
 }
 
