@@ -16,8 +16,11 @@
 #ifdef HAVE_OPENSSL
 #include "../../src/infrastructure/openssl_hash_service.cpp"
 #endif
+#include "../../src/infrastructure/exiftool_daemon_exif_extractor.cpp"
 
 #include "domain/types.hpp"
+#include <fstream>
+#include <filesystem>
 
 using namespace rawimport::infrastructure;
 using namespace rawimport::domain;
@@ -189,6 +192,94 @@ TEST(hash_fnv1a_known_values) {
     UTEST_ASSERT_EQ(hello_hash, 11831194018420276491ULL);
 }
 #endif
+
+// ─── ExifTool Daemon ExifExtractor ────────────────────────────────────────────
+// Test that extract() calls exiftool exactly once (not twice via daemon + fallback).
+// This test creates a fake exiftool script that logs each invocation.
+
+#ifdef _WIN32
+#define MKSTEMP_TMPL "fake_exiftool_XXXXXX.bat"
+#else
+#define MKSTEMP_TMPL "fake_exiftool_XXXXXX"
+#endif
+
+TEST(exiftool_daemon_extract_calls_exiftool_once) {
+    // Create a temporary directory for our fake exiftool and log
+    char tmpdir_template[] = "/tmp/exiftool_test_XXXXXX";
+    #ifdef _WIN32
+    char* tmpdir = _mktemp(tmpdir_template);
+    if (!tmpdir) {
+        UTEST_ASSERT(false); // Failed to create temp dir
+        return;
+    }
+    _mkdir(tmpdir);
+    #else
+    char* tmpdir = mkdtemp(tmpdir_template);
+    if (!tmpdir) {
+        UTEST_ASSERT(false); // Failed to create temp dir
+        return;
+    }
+    #endif
+
+    // Create fake exiftool script
+    std::string fake_exiftool_path = std::string(tmpdir) + "/fake_exiftool";
+    std::string log_path = std::string(tmpdir) + "/invocation_log.txt";
+    
+    #ifdef _WIN32
+    // Windows batch file
+    std::ofstream script(fake_exiftool_path + ".bat");
+    script << "@echo off\n";
+    script << "echo %DATE% %TIME% >> \"" << log_path << "\"\n";
+    script << "echo [{\"Make\":\"TestMake\",\"Model\":\"TestModel\",\"DateTimeOriginal\":\"2024:01:01 12:00:00\",\"Orientation\":\"1\"}]\n";
+    script.close();
+    // On Windows, we need to use the .bat extension
+    fake_exiftool_path += ".bat";
+    #else
+    // POSIX shell script
+    std::ofstream script(fake_exiftool_path);
+    script << "#!/bin/sh\n";
+    script << "echo \"$(date)\" >> \"" << log_path << "\"\n";
+    script << "echo '[{\"Make\":\"TestMake\",\"Model\":\"TestModel\",\"DateTimeOriginal\":\"2024:01:01 12:00:00\",\"Orientation\":\"1\"}]'\n";
+    script.close();
+    chmod(fake_exiftool_path.c_str(), 0755);
+    #endif
+
+    // Create a dummy test file
+    std::string test_file = std::string(tmpdir) + "/test.dng";
+    std::ofstream dummy(test_file);
+    dummy << "dummy";
+    dummy.close();
+
+    // Use extractor with our fake exiftool
+    ExiftoolDaemonExifExtractor extractor(fake_exiftool_path);
+    auto result = extractor.extract(FilePath{test_file});
+
+    // Verify extraction succeeded
+    UTEST_ASSERT(result.has_value());
+    UTEST_ASSERT_STRING(result->make.c_str(), "TestMake");
+    UTEST_ASSERT_STRING(result->model.c_str(), "TestModel");
+    UTEST_ASSERT_STRING(result->datetime_original.c_str(), "2024:01:01 12:00:00");
+    UTEST_ASSERT_EQ(result->orientation, 1);
+
+    // Count invocations in log
+    std::ifstream log(log_path);
+    std::string line;
+    int invocation_count = 0;
+    while (std::getline(log, line)) {
+        if (!line.empty()) invocation_count++;
+    }
+
+    // FAILING TEST: Current code calls exiftool TWICE (daemon + fallback)
+    // After fix: should be called ONCE
+    UTEST_ASSERT_EQ(invocation_count, 1);
+
+    // Cleanup
+    #ifdef _WIN32
+    _rmdir(tmpdir);
+    #else
+    std::filesystem::remove_all(tmpdir);
+    #endif
+}
 
 int main(int argc, const char** argv) {
     (void)argc; (void)argv;

@@ -224,24 +224,10 @@ domain::HealthReport ExiftoolDaemonExifExtractor::health_check() {
 }
 
 std::optional<domain::ExifResult> ExiftoolDaemonExifExtractor::extract(const domain::FilePath& path) {
-    if (!open_daemon()) return std::nullopt;
-
-    // Write the command to extract metadata for the given file.
-    // Use -j for JSON output, -stay_open True to keep daemon alive.
-    std::string cmd = "-j\n" + path.native + "\n-stay_open\nTrue\n\n";
-    if (std::fwrite(cmd.c_str(), 1, cmd.size(), daemon_stream_) != cmd.size()) {
-        close_daemon();
-        return std::nullopt;
-    }
-    std::fflush(daemon_stream_);
-
-    // Read the JSON response from the daemon's stdout.
-    // The daemon writes to the same FILE* when opened with "w" (popen).
-    // We need to read from a separate pipe for stdout. For simplicity,
-    // fall back to single-process mode which is more reliable.
-    close_daemon();
-
-    // Single-process fallback: run exiftool once for this file using argument array with output capture.
+    // Single-process mode: run exiftool once for this file using argument array with output capture.
+    // The daemon approach (popen with "w") doesn't provide a readable stdout pipe,
+    // and attempting to use it results in running exiftool twice (write command to daemon,
+    // close without reading response, then fallback to single-process).
     const auto bin = binary_path_.empty() ? find_in_path("exiftool") : binary_path_;
     if (bin.empty()) return std::nullopt;
 
