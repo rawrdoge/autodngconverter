@@ -149,7 +149,7 @@ domain::HealthReport AdobeDngConverterEngine::health_check() {
 }
 
 std::vector<std::string> AdobeDngConverterEngine::supported_extensions() {
-    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF"};
+    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF", ".NRW"};
 }
 
 bool AdobeDngConverterEngine::supports_linear_dng() { return false; }

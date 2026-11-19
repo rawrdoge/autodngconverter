@@ -7,7 +7,8 @@ services:
     restart: unless-stopped
     environment:
       - RAWIMPORT_DB_DRIVER=${RAWIMPORT_DB_DRIVER:-postgresql}
-      - RAWIMPORT_DB_CONNECTION=${RAWIMPORT_DB_CONNECTION:-postgresql://rawimport:${DB_PASSWORD}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-rawimport}}
+      - RAWIMPORT_DB_CONNECTION=${RAWIMPORT_DB_CONNECTION:-postgresql://rawimport:***@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-rawimport}}
+      - RAWIMPORT_DATABASE_URL=${RAWIMPORT_DATABASE_URL:-}
       - RAWIMPORT_DB_SSLMODE=${RAWIMPORT_DB_SSLMODE:-disable}
       - RAWIMPORT_INPUT_DIR=/watch
       - RAWIMPORT_OUTPUT_DIR=/output
@@ -16,11 +17,16 @@ services:
       - RAWIMPORT_CONVERTER_ENGINE_BIN=${CONVERTER_ENGINE_BIN:-}
       - RAWIMPORT_APPDATA_DIR=/appdata
       - RAWIMPORT_EXIFTOOL_BIN=exiftool
+      - RAWIMPORT_EXIFTOOL_MODE=daemon
       - RAWIMPORT_FOLDER_SCHEMA=%Y/%m
       - RAWIMPORT_FILE_PATTERN=IMG_{seq}
-      - RAWIMPORT_POLL_INTERVAL=10
+      - RAWIMPORT_WATCH_POLL_INTERVAL=${RAWIMPORT_POLL_INTERVAL:-10}
+      - RAWIMPORT_WATCH_STABILITY_INTERVAL_MS=1000
+      - RAWIMPORT_WATCH_MAX_STABILITY_CHECKS=30
       - RAWIMPORT_LOG_LEVEL=info
       - RAWIMPORT_PORT=8080
+      - RAWIMPORT_IMMICH_BASE_URL=${RAWIMPORT_IMMICH_BASE_URL:-}
+      - RAWIMPORT_IMMICH_API_KEY=${RAWIMPORT_IMMICH_API_KEY:-}
     volumes:
       - /mnt/nas/photos/watch:/watch
       - /mnt/nas/photos/output:/output

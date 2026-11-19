@@ -635,7 +635,7 @@ PostgresqlImportStore::list_migration_rows(const std::string& table,
         if (i) sql << ", ";
         sql << "\"" << columns[i] << "\"";
     }
-    sql << " FROM \"" << table << "\"";
+    sql << " FROM \"" << table << "\" ORDER BY \"id\"";
 
     PGresult* res = PQexec(pgconn, sql.str().c_str());
     drop_(conn);

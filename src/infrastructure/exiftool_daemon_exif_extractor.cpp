@@ -217,10 +217,11 @@ void ExiftoolDaemonExifExtractor::close_daemon() {
 }
 
 domain::HealthReport ExiftoolDaemonExifExtractor::health_check() {
-    if (!open_daemon())
-        return {domain::HealthStatus::Unhealthy, "exiftool daemon not available", domain::now()};
-    close_daemon();
-    return {domain::HealthStatus::Healthy, "exiftool daemon OK", domain::now()};
+    const auto bin = binary_path_.empty() ? find_in_path("exiftool") : binary_path_;
+    if (bin.empty())
+        return {domain::HealthStatus::Unhealthy, "exiftool binary not found", domain::now()};
+    const auto ver = exec_cmd_capture({bin, "-ver"}, nullptr);
+    return {domain::HealthStatus::Healthy, "exiftool OK", domain::now()};
 }
 
 std::optional<domain::ExifResult> ExiftoolDaemonExifExtractor::extract(const domain::FilePath& path) {

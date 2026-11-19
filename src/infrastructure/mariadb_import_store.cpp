@@ -701,7 +701,7 @@ MariadbImportStore::list_migration_rows(const std::string& table,
         if (i) sql << ", ";
         sql << "`" << columns[i] << "`";
     }
-    sql << " FROM `" << table << "`";
+    sql << " FROM `" << table << "` ORDER BY `id`";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);

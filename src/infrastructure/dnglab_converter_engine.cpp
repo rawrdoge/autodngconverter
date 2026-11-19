@@ -50,7 +50,7 @@ domain::HealthReport DnglabConverterEngine::health_check() {
 }
 
 std::vector<std::string> DnglabConverterEngine::supported_extensions() {
-    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF", ".DNG"};
+    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF", ".DNG", ".NRW"};
 }
 
 bool DnglabConverterEngine::supports_linear_dng() { return true; }

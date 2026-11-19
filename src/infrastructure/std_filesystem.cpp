@@ -7,6 +7,8 @@
 #include <fstream>
 #include <system_error>
 #include <vector>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 namespace rawimport::infrastructure {
 
@@ -104,28 +106,27 @@ domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::Fi
     if (!std::filesystem::exists(p)) return fp;
 
     fp.size_bytes = static_cast<uint64_t>(std::filesystem::file_size(p));
-    // Convert filesystem::file_time_type to system_clock::time_point portably.
-    // On Linux/macOS, file_time_type uses the same epoch as system_clock (Unix epoch).
-    // On Windows, it uses FILETIME (1601 epoch). Use std::chrono::clock_cast (C++20)
-    // when available, otherwise use a portable approximation.
-    const auto wt = std::filesystem::last_write_time(p);
+    // Use stat() for portable Unix epoch mtime. std::filesystem::file_time_type
+    // epoch is implementation-defined; on some GCC/platforms it differs from
+    // system_clock, causing wrong timestamps in fingerprints.
+    struct stat st{};
+    if (stat(p.c_str(), &st) == 0) {
+        fp.mtime = std::chrono::system_clock::from_time_t(st.st_mtime);
+    } else {
+        // Fallback: best-effort using filesystem clock (may be wrong on some platforms)
+        const auto wt = std::filesystem::last_write_time(p);
 #if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
-    // C++20 clock_cast for portable conversion (available on GCC 11+, Clang 12+, MSVC 19.28+)
-    try {
-        fp.mtime = std::chrono::clock_cast<std::chrono::system_clock>(wt);
-    } catch (...) {
-        // Fallback for platforms where clock_cast is not fully implemented
-        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
-                              wt.time_since_epoch()).count();
-        fp.mtime = std::chrono::system_clock::from_time_t(secs);
-    }
+        try {
+            fp.mtime = std::chrono::clock_cast<std::chrono::system_clock>(wt);
+        } catch (...) {
+            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(wt.time_since_epoch()).count();
+            fp.mtime = std::chrono::system_clock::from_time_t(secs);
+        }
 #else
-    // Pre-C++20 or platforms without clock_cast: assume Unix epoch (Linux/macOS).
-    // This is correct on Linux/macOS but not on Windows.
-    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
-                          wt.time_since_epoch()).count();
-    fp.mtime = std::chrono::system_clock::from_time_t(secs);
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(wt.time_since_epoch()).count();
+        fp.mtime = std::chrono::system_clock::from_time_t(secs);
 #endif
+    }
 
     // FNV-1a of first 4 KiB.
     constexpr std::size_t CHUNK = 4096;

@@ -356,9 +356,9 @@ int run_application(int argc, char** argv) {
     // ─── Exif Extractor ────────────────────────────────────────────────────────
     std::unique_ptr<ExifExtractor> extractor;
 #ifdef WITH_EXIFTOOL
-    std::string exiftool_mode = config->get_string("EXIFTOOL_MODE").value_or("daemon");
+    std::string exiftool_mode = config->get_string("EXIFTOOL_MODE").value_or("cli");
     if (exiftool_mode == "daemon") {
-        log->info("Using ExifTool daemon extractor");
+        log->info("Using ExifTool daemon extractor (single-process fallback)");
         extractor = std::make_unique<ExiftoolDaemonExifExtractor>();
     } else {
         log->info("Using ExifTool CLI extractor");
@@ -422,8 +422,15 @@ int run_application(int argc, char** argv) {
             log->error("OUTPUT_DIR not configured for watch mode");
             return 1;
         }
-        // Polling interval (seconds)
-        int poll_interval = config->get_int("WATCH_POLL_INTERVAL").value_or(30);
+        // Polling interval (seconds) - support both new and legacy key names
+        auto get_int_with_fallback = [&](const std::string& new_key, const std::string& legacy_key, int default_val) -> int {
+            auto val = config->get_int(new_key);
+            if (val) return *val;
+            val = config->get_int(legacy_key);
+            if (val) return *val;
+            return default_val;
+        };
+        int poll_interval = get_int_with_fallback("WATCH_POLL_INTERVAL", "POLL_INTERVAL", 30);
         // File stability check interval (milliseconds)
         int stability_interval_ms = config->get_int("WATCH_STABILITY_INTERVAL_MS").value_or(1000);
         // Max stability checks before giving up
