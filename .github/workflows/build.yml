@@ -58,3 +58,22 @@ jobs:
         run: cmake --build build -j4
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  build-windows:
+    name: Build & Test (Windows/MSVC)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          choco install cmake openssl --no-progress
+          # MariaDB/PostgreSQL not needed for minimal Windows build
+      - name: Configure
+        run: cmake -S . -B build -DWITH_HEXAGONAL=ON -DWITH_POSTGRESQL=OFF -DWITH_MARIADB=OFF -DWITH_DNGLAB=OFF -DWITH_ADOBE_DNG=OFF -DWITH_EXIFTOOL=OFF -DWITH_IMMICH=OFF -DWITH_SPDLOG=OFF -DBUILD_TESTING=ON -DCMAKE_CXX_COMPILER=cl
+      - name: Build
+        run: cmake --build build --config Release -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
