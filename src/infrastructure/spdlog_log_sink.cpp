@@ -111,16 +111,16 @@ public:
     explicit Impl(std::string logger_name)
         : logger_(spdlog::get(logger_name)) {
         if (!logger_) {
-            // Create logger with stdout + stderr sinks (compatible with spdlog 1.9+)
-            auto stdout_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-            auto stderr_sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+            // Create logger with single stdout sink (prevents duplicate console output)
+            auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
 
-            std::vector<spdlog::sink_ptr> sinks = {stdout_sink, stderr_sink};
+            std::vector<spdlog::sink_ptr> sinks = {console_sink};
 
             // Add file sink if path specified
             if (const char* path = std::getenv("RAWIMPORT_LOG_FILE")) {
                 try {
-                    sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(path, true));
+                    // Append mode (false) so restarts don't erase existing logs
+                    sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(path, false));
                 } catch (...) {
                     // Ignore file sink errors
                 }

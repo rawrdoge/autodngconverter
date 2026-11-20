@@ -185,12 +185,18 @@ ExiftoolDaemonExifExtractor::~ExiftoolDaemonExifExtractor() {
 bool ExiftoolDaemonExifExtractor::open_daemon() {
     const auto bin = binary_path_.empty() ? find_in_path("exiftool") : binary_path_;
     if (bin.empty()) return false;
+    // Resolve relative paths to absolute before validation
+    std::filesystem::path bin_path(bin);
+    if (!bin_path.is_absolute()) {
+        bin_path = std::filesystem::absolute(bin_path);
+    }
     // Validate binary path: must be absolute, exist, and not contain shell metacharacters.
-    if (!std::filesystem::is_regular_file(bin) || !std::filesystem::path(bin).is_absolute()) {
+    if (!std::filesystem::is_regular_file(bin_path) || !bin_path.is_absolute()) {
         return false;
     }
+    const auto bin_str = bin_path.string();
     // Check for shell metacharacters that could be exploited
-    for (char c : bin) {
+    for (char c : bin_str) {
         if (c == ' ' || c == '\t' || c == ';' || c == '&' || c == '|' || c == '$' ||
             c == '`' || c == '(' || c == ')' || c == '<' || c == '>' || c == '\'' ||
             c == '"' || c == '\\' || c == '\n' || c == '\r') {
