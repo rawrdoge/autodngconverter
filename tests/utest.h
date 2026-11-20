@@ -21,6 +21,9 @@
 
 typedef struct utest_entry utest_entry_t; // Forward declaration for MSVC static registration
 
+// Forward declare utest_register for MSVC static registration constructor
+static inline void utest_register(utest_entry_t *e);
+
 #if defined(_WIN32) && defined(__cplusplus)
 // Portable C++ static-registration fallback for MSVC and other compilers.
 struct utest_registrar_t {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -15,6 +16,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// Windows popen/pclose are _popen/_pclose
+#define popen _popen
+#define pclose _pclose
 // On Windows, MultiByteToWideChar with -1 length includes a trailing null.
 // We must strip it from every converted string before appending to the command line.
 static inline std::wstring utf8_to_wide(const std::string& s) {
