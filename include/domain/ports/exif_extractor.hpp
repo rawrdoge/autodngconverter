@@ -18,6 +18,9 @@ public:
 
     // Extract EXIF from a single file. Returns nullopt if no EXIF found.
     virtual std::optional<ExifResult> extract(const FilePath& path) = 0;
+
+    // Returns true if this extractor can actually extract EXIF (false for no-op/disabled).
+    virtual bool is_available() const = 0;
 };
 
 } // namespace rawimport::domain

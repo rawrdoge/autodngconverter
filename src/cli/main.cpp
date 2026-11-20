@@ -7,6 +7,8 @@
 #include <string>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <chrono>
 
 // Domain ports
 #include "domain/ports/config_provider.hpp"
@@ -62,6 +64,8 @@ public:
     void LogCollisionDuplicateHash(std::string_view, std::string_view, std::string_view, std::string_view) override {}
     void LogCollisionDuplicateHashDeadLetter(std::string_view, std::string_view) override {}
     void LogConversionFailedEngineError(std::string_view, std::string_view, int, std::string_view) override {}
+    void LogImportFailed(std::string_view, std::string_view) override {}
+    void LogCollisionDuplicateFound(std::string_view, std::string_view, const domain::SHA256Hash&, std::string_view) override {}
     void LogConversionFailedHashMismatch(std::string_view, std::string_view, std::string_view) override {}
     void LogConversionFailedTimeout(std::string_view, int) override {}
     void LogDeadLetterMaxRetries(std::string_view, int, std::string_view) override {}
@@ -70,6 +74,36 @@ public:
     void LogDbConnectionLost(int, int) override {}
     void LogDbDeadlock(std::string_view) override {}
     void LogDbQueryFailed(std::string_view, std::string_view) override {}
+
+    // ─── ExifTool Events ───────────────────────────────────────────────────────
+    void LogExifExtractionFailed(std::string_view, std::string_view, std::string_view, bool) override {}
+    void LogExifToolDaemonRestarted(std::string_view, int) override {}
+
+    // ─── Converter Events ──────────────────────────────────────────────────────
+    void LogConverterEngineUnavailable(std::string_view, std::string_view) override {}
+    void LogConverterUnsupportedFormat(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Filesystem Events ─────────────────────────────────────────────────────
+    void LogFilesystemReadError(std::string_view, std::string_view, int, std::string_view) override {}
+    void LogFilesystemWriteError(std::string_view, std::string_view, int, std::string_view) override {}
+    void LogFilesystemArchiveFailed(std::string_view, std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Hash Events ───────────────────────────────────────────────────────────
+    void LogHashVerificationFailed(std::string_view, std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Reconversion Events ───────────────────────────────────────────────────
+    void LogReconversionLockFailed(std::string_view, std::string_view, int) override {}
+    void LogReconversionSourceMissing(std::string_view, std::string_view) override {}
+
+    // ─── Rotation Events ───────────────────────────────────────────────────────
+    void LogRotationPushFailed(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Config Events ─────────────────────────────────────────────────────────
+    void LogConfigInvalidValue(std::string_view, std::string_view, std::string_view) override {}
+
+    // ─── Watch Events ──────────────────────────────────────────────────────────
+    void LogWatchScanFailed(std::string_view, std::string_view) override {}
+    void LogWatchStabilityTimeout(std::string_view, std::string_view, int) override {}
 };
 std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) { return std::make_shared<NoopLogSink>(); }
 } // namespace rawimport::infrastructure
@@ -85,6 +119,10 @@ std::shared_ptr<domain::LogSink> make_spdlog_log_sink(std::string logger_name) {
 #ifdef WITH_EXIFTOOL
 #include "infrastructure/exiftool_exif_extractor.hpp"
 #include "infrastructure/exiftool_daemon_exif_extractor.hpp"
+#endif
+
+#ifdef WITH_IMMICH
+#include "infrastructure/immich_rotation_sink.hpp"
 #endif
 
 #if defined(WITH_DNGLAB) || defined(WITH_ADOBE_DNG)
@@ -107,19 +145,128 @@ using namespace rawimport::infrastructure;
 using namespace rawimport::use_cases;
 
 int run_application(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
-
     // ─── Load .env file if present ─────────────────────────────────────────────
     // Note: In production, use a proper dotenv library. Here we assume env vars
     // are already set (e.g., by systemd, docker, or shell).
     // load_dotenv(".env"); // Requires external lib; omitted for zero-dep build.
 
+    // Early exit for help command
+    if (argc < 2) {
+        std::cout << "Usage: rawimport <command> [args...]\n";
+        std::cout << "Commands: import, reconvert, scan, rotate, stats, config, migrate, watch\n";
+        return 0;
+    }
+
+    std::string command = argv[1];
+
+    // Commands that don't require full config validation (just show help)
+    if (command == "help") {
+        std::cout << "Usage: rawimport <command> [args...]\n";
+        std::cout << "Commands: import, reconvert, scan, rotate, stats, config, migrate, watch\n";
+        return 0;
+    }
+
+    // ─── Config Command (validate and display config, no DB/hash required) ──────────
+    if (command == "config") {
+        auto config = std::make_shared<EnvConfigProvider>("RAWIMPORT_");
+        ConfigValidate config_uc(*config);
+        auto report = config_uc.execute();
+        std::cout << "Config valid: " << (report.valid ? "yes" : "no") << "\n";
+        if (!report.missing_keys.empty()) {
+            std::cout << "Missing keys:\n";
+            for (const auto& k : report.missing_keys) std::cout << "  - " << k << "\n";
+        }
+        auto cfg_map = config->to_map();
+        for (const auto& [k, v] : cfg_map) {
+            // Redact sensitive values
+            if (k == "RAWIMPORT_DB_CONNECTION" || k == "RAWIMPORT_DATABASE_URL" || k == "RAWIMPORT_IMMICH_API_KEY") {
+                std::cout << k << "=[REDACTED]\n";
+            } else {
+                std::cout << k << "=" << v << "\n";
+            }
+        }
+        return report.valid ? 0 : 1;
+    }
+
+    // ─── Migrate Command (handles its own config via CLI args) ──────────────────
+#ifdef HAVE_MIGRATION
+    if (command == "migrate") {
+        migration::MigrationOptions opts;
+        std::string error_msg;
+
+        // Shift argv so argv[1] is the command we already consumed
+        // migrate_command expects args AFTER the subcommand
+        for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
+        --argc;
+
+        if (!parse_migrate_args(argc, argv, opts, error_msg)) {
+            std::cerr << "Error: " << error_msg << "\n";
+            print_migrate_usage();
+            return 1;
+        }
+
+        if (opts.guide_mode) {
+            auto result = run_guided_mode();
+            if (result.status == migration::MigrationStatus::Success) {
+                std::cout << "Guided migration setup completed.\n";
+            } else {
+                std::cerr << "Guided setup failed: " << result.message << "\n";
+                return 1;
+            }
+            return 0;
+        }
+
+        if (static_cast<int>(opts.from) == static_cast<int>(opts.to)) {
+            std::cerr << "Error: Source and target databases must differ.\n";
+            return 1;
+        }
+
+        std::cout << "=== rawimport migrate ===\n";
+        std::cout << "Running migration from "
+                  << (opts.from == migration::SourceDB::MariaDB ? "MariaDB" : "PostgreSQL")
+                  << " to "
+                  << (opts.to == migration::TargetDB::PostgreSQL ? "PostgreSQL" : "MariaDB") << "\n";
+        auto redact_dsn = [](const std::string& dsn) -> std::string {
+            // Redact password in postgresql://user:pass@host/db or mariadb://user:pass@host/db
+            size_t at_pos = dsn.find('@');
+            size_t colon_pos = dsn.find(':', dsn.find("://") + 3);
+            if (at_pos != std::string::npos && colon_pos != std::string::npos && colon_pos < at_pos) {
+                return dsn.substr(0, colon_pos + 1) + "[REDACTED]" + dsn.substr(at_pos);
+            }
+            return "[REDACTED]";
+        };
+        std::cout << "Source DSN: " << redact_dsn(opts.source_dsn) << "\n";
+        std::cout << "Target DSN: " << redact_dsn(opts.target_dsn) << "\n";
+        std::cout << "Dry run: " << (opts.dry_run ? "yes" : "no") << "\n";
+        std::cout << "Batch size: " << opts.batch_size << "\n";
+
+        migration::MigrationRunner runner(opts);
+        auto result = runner.run();
+        if (result.status == migration::MigrationStatus::Success) {
+            if (opts.dry_run) {
+                std::cout << "Dry run completed: " << result.message << "\n";
+                for (const auto& w : result.warnings) {
+                    std::cout << "Would: " << w << "\n";
+                }
+            } else {
+                std::cout << result.message << "\n";
+            }
+            return 0;
+        } else {
+            std::cerr << "Migration failed: " << result.message << "\n";
+            for (const auto& w : result.warnings) {
+                std::cerr << "Warning: " << w << "\n";
+            }
+            return 1;
+        }
+    }
+#endif
+
     // ─── Config Provider ───────────────────────────────────────────────────────
     auto config = std::make_shared<EnvConfigProvider>("RAWIMPORT_");
 
-    // Validate required config
-    auto validate_result = config->validate(required_config_keys());
+    // Validate required config (domain-level rules: at least one of DB_CONNECTION/DATABASE_URL).
+    auto validate_result = domain::validate_config(config->to_map());
     if (!validate_result.valid) {
         std::cerr << "Config validation failed. Missing keys: ";
         for (const auto& k : validate_result.missing_keys) {
@@ -135,14 +282,16 @@ int run_application(int argc, char** argv) {
     log->info("Starting rawimport CLI", {{"log_level", log_level_str}});
 
     // ─── Hash Service ──────────────────────────────────────────────────────────
+    std::shared_ptr<domain::HashService> hash_svc;
 #ifdef HAVE_OPENSSL
-    OpenSSLHashService hash_svc;
+    hash_svc = std::make_shared<OpenSSLHashService>();
 #else
-    NoopHashService hash_svc;
+    log->error("OpenSSL required for hash service; configure WITH_OPENSSL or install libssl-dev");
+    return 1;
 #endif
 
     // ─── File System ───────────────────────────────────────────────────────────
-    StdFileSystem fs(hash_svc);
+    StdFileSystem fs(*hash_svc);
 
     // ─── Import Store (selected by DB_DRIVER) ──────────────────────────────────
     std::string db_driver = config->get_string("DB_DRIVER").value_or("postgresql");
@@ -174,13 +323,20 @@ int run_application(int argc, char** argv) {
 #endif
     }
 
-    // Connect and migrate
+    // Connect and initialize schema
     auto health = store->health_check();
     if (health.status == HealthStatus::Unhealthy) {
         log->error("Database health check failed: " + health.message);
         return 1;
     }
     log->info("Database connected and healthy");
+
+    // Initialize schema
+    if (!store->init_schema()) {
+        log->error("Failed to initialize database schema");
+        return 1;
+    }
+    log->info("Database schema initialized");
 
     // ─── Converter Engine (via factory) ────────────────────────────────────────
     std::unique_ptr<ConverterEngine> engine;
@@ -200,9 +356,9 @@ int run_application(int argc, char** argv) {
     // ─── Exif Extractor ────────────────────────────────────────────────────────
     std::unique_ptr<ExifExtractor> extractor;
 #ifdef WITH_EXIFTOOL
-    std::string exiftool_mode = config->get_string("EXIFTOOL_MODE").value_or("daemon");
+    std::string exiftool_mode = config->get_string("EXIFTOOL_MODE").value_or("cli");
     if (exiftool_mode == "daemon") {
-        log->info("Using ExifTool daemon extractor");
+        log->info("Using ExifTool daemon extractor (single-process fallback)");
         extractor = std::make_unique<ExiftoolDaemonExifExtractor>();
     } else {
         log->info("Using ExifTool CLI extractor");
@@ -217,6 +373,7 @@ int run_application(int argc, char** argv) {
         std::optional<ExifResult> extract(const FilePath&) override {
             return std::nullopt;
         }
+        bool is_available() const override { return false; }
     };
     extractor = std::make_unique<NoopExifExtractor>();
     log->warn("WITH_EXIFTOOL not enabled - using no-op ExifExtractor");
@@ -234,7 +391,7 @@ int run_application(int argc, char** argv) {
         log->info("Configuring Immich RotationSink", {{"base_url", immich_url}});
         rotation_sink = std::make_unique<ImmichRotationSink>(immich_url, immich_key);
         auto rot_health = rotation_sink->health_check();
-        if (rot_health.status == HealthStatus::Unhealthy) {
+        if (rot_health.status == domain::HealthStatus::Unhealthy) {
             log->warn("Immich rotation sink health check failed: " + rot_health.message);
         }
 #else
@@ -243,75 +400,83 @@ int run_application(int argc, char** argv) {
     }
 
     // ─── Wire Use Cases ────────────────────────────────────────────────────────
-    Import import_uc(*store, *engine, *extractor, fs, hash_svc, *log, *metrics);
+    Import import_uc(*store, *engine, *extractor, fs, *hash_svc, *log, *metrics);
     Reconversion reconversion_uc(*store, *engine, fs, *log);
-    Scan scan_uc(*store, fs, hash_svc, *log);
-    Rotation rotation_uc(*store, *rotation_sink, *log);
+    Scan scan_uc(*store, fs, *hash_svc, *log);
     Stats stats_uc(*store);
-    ConfigValidate config_uc(*config);
 
     // ─── Command Dispatch ──────────────────────────────────────────────────────
 
-    if (argc < 2) {
-        log->info("Usage: rawimport <command> [args...]");
-        log->info("Commands: import, reconvert, scan, rotate, stats, config, migrate");
-        return 0;
-    }
-
-    std::string command = argv[1];
-
-    // ─── Migrate Command ───────────────────────────────────────────────────────
-#ifdef WITH_MARIADB
-#ifdef WITH_POSTGRESQL
-    if (command == "migrate") {
-        migration::MigrationOptions opts;
-        std::string error_msg;
-
-        // Shift argv so argv[1] is the command we already consumed
-        // migrate_command expects args AFTER the subcommand
-        for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
-        --argc;
-
-        if (!parse_migrate_args(argc, argv, opts, error_msg)) {
-            std::cerr << "Error: " << error_msg << "\n";
-            print_migrate_usage();
+    // ─── Watch Command (service mode) ──────────────────────────────────────────
+    if (command == "watch") {
+        std::string watch_dir = config->get_string("INPUT_DIR").value_or("");
+        if (watch_dir.empty()) {
+            log->error("INPUT_DIR not configured for watch mode");
             return 1;
         }
+        log->info("Starting watch mode", {{"watch_dir", watch_dir}});
+        auto extensions = engine->supported_extensions();
+        // Output directory for converted files
+        std::string output_dir = config->get_string("OUTPUT_DIR").value_or("");
+        if (output_dir.empty()) {
+            log->error("OUTPUT_DIR not configured for watch mode");
+            return 1;
+        }
+        // Polling interval (seconds) - support both new and legacy key names
+        auto get_int_with_fallback = [&](const std::string& new_key, const std::string& legacy_key, int default_val) -> int {
+            auto val = config->get_int(new_key);
+            if (val) return *val;
+            val = config->get_int(legacy_key);
+            if (val) return *val;
+            return default_val;
+        };
+        int poll_interval = get_int_with_fallback("WATCH_POLL_INTERVAL", "POLL_INTERVAL", 30);
+        // File stability check interval (milliseconds)
+        int stability_interval_ms = config->get_int("WATCH_STABILITY_INTERVAL_MS").value_or(1000);
+        // Max stability checks before giving up
+        int max_stability_checks = config->get_int("WATCH_MAX_STABILITY_CHECKS").value_or(30);
 
-        if (opts.guide_mode) {
-            auto result = run_guided_mode();
-            if (result.status == migration::MigrationStatus::Success) {
-                std::cout << "Guided migration setup completed.\n";
-            } else {
-                std::cerr << "Guided setup failed: " << result.message << "\n";
-                return 1;
+        // Lambda to wait for file size and mtime to stabilize
+        auto wait_for_file_stability = [&](const domain::FilePath& path) -> bool {
+            auto prev_fp = fs.compute_fast_fingerprint(path);
+            for (int i = 0; i < max_stability_checks; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(stability_interval_ms));
+                auto curr_fp = fs.compute_fast_fingerprint(path);
+                if (curr_fp.size_bytes == prev_fp.size_bytes && curr_fp.mtime == prev_fp.mtime) {
+                    return true;  // File has stabilized
+                }
+                prev_fp = curr_fp;
             }
-            return 0;
+            return false;  // Max checks exceeded
+        };
+
+        // Run continuous scan/import loop
+        for (;;) {
+            auto result = scan_uc.execute(watch_dir, extensions);
+            log->info("Watch scan complete",
+                      {{"new_files", std::to_string(result.new_files.size())},
+                       {"unchanged", std::to_string(result.unchanged_files.size())}});
+            // Import new files
+            for (const auto& fp : result.new_files) {
+                // Wait for file to stabilize (size and mtime stop changing)
+                if (!wait_for_file_stability(fp)) {
+                    log->warn("File did not stabilize, skipping: " + fp.native);
+                    continue;
+                }
+                
+                // Pass output directory with trailing slash to trigger auto-naming in Import::execute
+                domain::FilePath dest_dir{output_dir + "/"};
+                ConversionSettings settings;
+                auto outcome = import_uc.execute(fp, dest_dir, settings);
+                if (outcome.success) {
+                    log->info("Auto-imported: " + fp.native + " -> " + outcome.record.output_path.native);
+                } else {
+                    log->error("Auto-import failed: " + fp.native + " - " + outcome.error);
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(poll_interval));
         }
-
-        if (opts.from == opts.to) {
-            std::cerr << "Error: Source and target databases must differ.\n";
-            return 1;
-        }
-
-        std::cout << "=== rawimport migrate ===\n";
-        std::cout << "Running migration from "
-                  << (opts.from == migration::SourceDB::MariaDB ? "MariaDB" : "PostgreSQL")
-                  << " to "
-                  << (opts.to == migration::TargetDB::PostgreSQL ? "PostgreSQL" : "MariaDB") << "\n";
-        std::cout << "Source DSN: " << opts.source_dsn << "\n";
-        std::cout << "Target DSN: " << opts.target_dsn << "\n";
-        std::cout << "Dry run: " << (opts.dry_run ? "yes" : "no") << "\n";
-        std::cout << "Batch size: " << opts.batch_size << "\n";
-
-        // In production, this would create the MigrationRunner and execute.
-        // For now, we report that the full pipeline requires database adapters.
-        std::cout << "Migrate command received (full runner integration pending).";
-
-        return 0;
     }
-#endif
-#endif
 
     try {
         if (command == "import") {
@@ -386,6 +551,7 @@ int run_application(int argc, char** argv) {
                 log->error("Rotation sink not configured (IMMICH_BASE_URL and IMMICH_API_KEY required)");
                 return 1;
             }
+            Rotation rotation_uc(*store, *rotation_sink, *log);
             int64_t import_id = std::stoll(argv[2]);
             int orientation = std::stoi(argv[3]);
             auto outcome = rotation_uc.execute(import_id, orientation);
@@ -405,19 +571,6 @@ int run_application(int argc, char** argv) {
             std::cout << "Active locks: " << snap.active_locks << "\n";
             std::cout << "Alerts: " << snap.alerts_count << "\n";
             return 0;
-        }
-        else if (command == "config") {
-            auto report = config_uc.execute();
-            std::cout << "Config valid: " << (report.valid ? "yes" : "no") << "\n";
-            if (!report.missing_keys.empty()) {
-                std::cout << "Missing keys:\n";
-                for (const auto& k : report.missing_keys) std::cout << "  - " << k << "\n";
-            }
-            auto cfg_map = config->to_map();
-            for (const auto& [k, v] : cfg_map) {
-                std::cout << k << "=" << v << "\n";
-            }
-            return report.valid ? 0 : 1;
         }
         else {
             log->error("Unknown command: " + command);

@@ -27,6 +27,7 @@ public:
     std::optional<domain::FilePath>   convert(const domain::FilePath& source,
                                                const domain::FilePath& dest,
                                                const domain::ConversionSettings& settings) override;
+    std::string                       name() const override { return "dnglab"; }
 
 private:
     int max_workers_;

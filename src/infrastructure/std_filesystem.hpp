@@ -23,7 +23,7 @@ public:
     std::optional<domain::FilePath> move_file(const domain::FilePath& src, const domain::FilePath& dst) override;
     bool                copy_file(const domain::FilePath& src, const domain::FilePath& dst) override;
     bool                delete_file(const domain::FilePath& path) override;
-    std::optional<domain::SHA256Hash> sha256_file(const domain::FilePath& path) override;
+    std::optional<domain::SHA256Hash> sha256_file(const domain::FilePath& path, int* errno_out = nullptr) override;
     domain::FastFingerprint compute_fast_fingerprint(const domain::FilePath& path) override;
     std::vector<domain::FilePath> list_directory(const std::string& dir_path,
                                                   const std::string& extension_filter) override;

@@ -13,9 +13,9 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque MariaDB connection handle.
-struct st_mariadb;
-using MariadbHandle = st_mariadb*;
+// Opaque MariaDB connection handle (use MySQL C API types).
+#include <mariadb/mysql.h>
+using MariadbHandle = MYSQL*;
 
 namespace rawimport::infrastructure {
 
@@ -28,6 +28,7 @@ public:
     // ── imports ───────────────────────────────────────────────────────────────
     std::optional<int64_t>   create_import(const domain::ImportRecord& rec) override;
     std::optional<domain::ImportRecord> get_import(int64_t id) override;
+    std::optional<domain::ImportRecord> find_import_by_source_hash(const domain::SHA256Hash& hash) override;
     bool                     update_import(domain::ImportRecord rec) override;
     std::vector<domain::ImportRecord> list_imports(std::optional<domain::ImportStatus> status_filter) override;
 
@@ -74,9 +75,13 @@ public:
     bool execute_migration_sql(const std::string& sql) override;
     bool table_exists(const std::string& table) override;
     int expire_stale_locks(int64_t max_age_seconds) override;
+    int64_t count_active_locks() override;
 
     // ── health ────────────────────────────────────────────────────────────────
-    HealthReport health_check() override;
+    domain::HealthReport health_check() override;
+
+    // ── schema initialization ──────────────────────────────────────────────────
+    bool init_schema() override;
 
 private:
     std::string connection_string_;
@@ -84,7 +89,7 @@ private:
     void drop_(MariadbHandle conn) const;
 
     // Helper: escape string for SQL.
-    static std::string sql_escape(const std::string& s) const;
+    std::string sql_escape(MariadbHandle conn, const std::string& s) const;
 };
 
 } // namespace rawimport::infrastructure

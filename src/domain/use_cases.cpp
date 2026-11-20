@@ -4,7 +4,9 @@
 #include "domain/use_cases.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <iostream>
+#include <map>
 #include <set>
 
 namespace rawimport::use_cases {
@@ -28,68 +30,177 @@ ImportOutcome Import::execute(const domain::FilePath& source,
     // 1. Verify source exists.
     if (!fs_.exists(source)) {
         outcome.error = "Source file not found: " + source.native;
+        log_.LogFilesystemReadError("", source.native, ENOENT, "exists");
         log_.error(outcome.error);
         return outcome;
     }
 
-    // 2. Check lock.
+    // 2. Compute SHA256 hash for duplicate detection.
+    int hash_errno = 0;
+    auto source_hash_opt = fs_.sha256_file(source, &hash_errno);
+    if (!source_hash_opt) {
+        outcome.error = "Failed to compute source file hash";
+        log_.LogFilesystemReadError("", source.native, hash_errno != 0 ? hash_errno : EIO, "sha256_file");
+        log_.error(outcome.error);
+        return outcome;
+    }
+    domain::SHA256Hash source_hash = *source_hash_opt;
+
+    // 3. Check for existing import with same hash (duplicate detection).
+    auto existing = store_.find_import_by_source_hash(source_hash);
+    domain::ImportRecord rec;
+    bool reuse_existing = false;
+    if (existing) {
+        // If completed, treat as duplicate and return existing record
+        if (existing->status == domain::ImportStatus::Completed) {
+            outcome.error = "Duplicate import detected: file already imported (import_id=" +
+                            std::to_string(existing->sequence_id) + ")";
+            log_.LogCollisionDuplicateFound(
+                "",  // no sequence ID allocated for duplicate (not imported)
+                std::to_string(existing->sequence_id),
+                source_hash,
+                source.native);
+            log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}});
+            outcome.record = *existing;
+            return outcome;  // Not a failure, but duplicate detected
+        }
+        // If failed, allow retry by reusing the existing record
+        if (existing->status == domain::ImportStatus::Failed) {
+            log_.info("Retrying previously failed import", {{"source", source.native}, {"import_id", std::to_string(existing->sequence_id)}});
+            // Update the existing record with new destination and reset status
+            existing->output_path = dest;
+            existing->status = domain::ImportStatus::Queued;
+            existing->error_message.clear();
+            existing->started_at = domain::Instant{};
+            existing->completed_at = domain::Instant{};
+            if (!store_.update_import(*existing)) {
+                outcome.error = "Failed to update import record for retry";
+                log_.error(outcome.error);
+                return outcome;
+            }
+            rec = *existing;
+            reuse_existing = true;
+            // Continue to conversion (fall through)
+        }
+        // If queued or converting, skip this file (another process may be handling it)
+        if (existing->status == domain::ImportStatus::Queued || existing->status == domain::ImportStatus::Converting) {
+            outcome.error = "Import already in progress or queued (import_id=" +
+                            std::to_string(existing->sequence_id) + ")";
+            log_.warn(outcome.error, {{"source", source.native}, {"existing_import_id", std::to_string(existing->sequence_id)}, {"status", domain::import_status_str(existing->status)}});
+            outcome.record = *existing;
+            return outcome;
+        }
+    }
+
+    // 4. Check lock.
     if (store_.is_locked(-1)) { // simplified: no import_id yet
         // For new imports we skip lock check; locks are for reconversion safety.
     }
 
-    // 3. Create import record.
-    domain::ImportRecord rec;
-    rec.source_path   = source;
-    rec.output_path   = dest;
-    rec.status        = domain::ImportStatus::Queued;
-    rec.source_fingerprint = fs_.compute_fast_fingerprint(source);
-    rec.created_at    = domain::now();
+    // 5. Create import record (only if not reusing existing failed record).
+    if (!reuse_existing) {
+        rec.source_path   = source;
+        // If dest.native ends with '/' or is empty, treat as directory for auto-naming
+        bool auto_name = dest.native.empty() || dest.native.back() == '/' || dest.native.back() == '\\';
+        if (auto_name) {
+            // Placeholder - will be updated after sequence ID is allocated
+            rec.output_path = domain::FilePath{dest.native + "placeholder.dng"};
+        } else {
+            rec.output_path = dest;
+        }
+        rec.status        = domain::ImportStatus::Queued;
+        rec.source_hash   = source_hash;
+        rec.source_fingerprint = fs_.compute_fast_fingerprint(source);
+        rec.created_at    = domain::now();
 
-    auto id_opt = store_.create_import(rec);
-    if (!id_opt) {
-        outcome.error = "Failed to create import record";
+        auto id_opt = store_.create_import(rec);
+        if (!id_opt) {
+            outcome.error = "Failed to create import record";
+            log_.LogDbQueryFailed("", "create_import returned null");
+            log_.error(outcome.error);
+            return outcome;
+        }
+        rec.sequence_id = *id_opt;
+
+        // If auto-naming, update output path with sequence ID
+        if (auto_name) {
+            std::string dir = dest.native;
+            if (!dir.empty() && (dir.back() == '/' || dir.back() == '\\')) {
+                dir.pop_back();
+            }
+            rec.output_path = domain::FilePath{dir + "/IMG_" + std::to_string(rec.sequence_id) + ".dng"};
+            if (!store_.update_import(rec)) {
+                outcome.error = "Failed to update import record with output path";
+                log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false");
+                log_.error(outcome.error);
+                return outcome;
+            }
+        }
+    }
+    outcome.record = rec;
+
+    // 6. Update status → Converting.
+    rec.status = domain::ImportStatus::Converting;
+    rec.started_at = domain::now();
+    if (!store_.update_import(rec)) {
+        outcome.error = "Failed to update import status to converting";
+        log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false");
         log_.error(outcome.error);
         return outcome;
     }
-    rec.sequence_id = *id_opt;
-    outcome.record = rec;
 
-    // 4. Update status → Converting.
-    rec.status = domain::ImportStatus::Converting;
-    rec.started_at = domain::now();
-    store_.update_import(rec);
-
-    // 5. Extract EXIF.
+    // 7. Extract EXIF.
     auto exif_opt = extractor_.extract(source);
-    if (exif_opt) {
+    if (!exif_opt) {
+        if (extractor_.is_available()) {
+            log_.LogExifExtractionFailed(std::to_string(rec.sequence_id), source.native, "extraction returned empty", false);
+        } else {
+            log_.debug("EXIF extraction skipped (extractor not available)", {{"source", source.native}});
+        }
+    } else {
         log_.info("EXIF extracted: " + exif_opt->make + " " + exif_opt->model,
                   {{"source", source.native}});
     }
 
-    // 6. Convert.
-    auto result = engine_.convert(source, dest, settings);
+    // 8. Convert.
+    // Use the resolved output path (auto-generated IMG_{id}.dng if dest was a directory)
+    const domain::FilePath& output_path = rec.output_path;
+    auto result = engine_.convert(source, output_path, settings);
     if (!result) {
         rec.status = domain::ImportStatus::Failed;
         rec.error_message = "Conversion failed";
         store_.update_import(rec);
         outcome.error = "Conversion failed";
-        metrics_.increment_counter("imports_failed", 1, {{"engine", engine_name(settings.engine)}});
+        metrics_.increment_counter("imports_failed", 1, {{"engine", engine_.name()}});
+        log_.LogImportFailed(std::to_string(rec.sequence_id), outcome.error);
+        log_.LogConversionFailedEngineError(std::to_string(rec.sequence_id), engine_.name(), -1, "engine returned null result");
         log_.error(outcome.error, {{"source", source.native}});
         return outcome;
     }
 
-    // 7. Success.
+    // 9. Success.
     rec.status     = domain::ImportStatus::Completed;
     rec.output_path = *result;
     rec.completed_at = domain::now();
-    store_.update_import(rec);
+    // Compute output file hash for verification.
+    int out_hash_errno = 0;
+    auto out_hash_opt = fs_.sha256_file(*result, &out_hash_errno);
+    if (out_hash_opt) {
+        rec.output_hash = *out_hash_opt;
+    }
+    if (!store_.update_import(rec)) {
+        outcome.error = "Failed to update import record on completion";
+        log_.LogDbQueryFailed(std::to_string(rec.sequence_id), "update_import returned false on completion");
+        log_.error(outcome.error);
+        return outcome;
+    }
 
     outcome.record       = rec;
     outcome.success      = true;
     outcome.error.clear();
 
     metrics_.increment_counter("imports_completed", 1,
-                                {{"engine", engine_name(settings.engine)}});
+                                {{"engine", engine_.name()}});
     log_.info("Import completed: " + source.native + " -> " + result->native);
     return outcome;
 }
@@ -111,6 +222,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto lock_opt = store_.acquire_lock(import_id, "reconversion");
     if (!lock_opt) {
         outcome.error = "Could not acquire lock for import " + std::to_string(import_id);
+        log_.LogReconversionLockFailed(std::to_string(import_id), "unknown", 0);
         log_.error(outcome.error);
         return outcome;
     }
@@ -119,6 +231,7 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto imp = store_.get_import(import_id);
     if (!imp) {
         outcome.error = "Import record not found: " + std::to_string(import_id);
+        log_.LogDbQueryFailed(std::to_string(import_id), "get_import returned empty (record not found or DB error)");
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -135,9 +248,11 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
     auto rec_id = store_.create_reconversion(rec);
     if (!rec_id) {
         outcome.error = "Failed to create reconversion record";
+        log_.LogDbQueryFailed(std::to_string(import_id), "create_reconversion returned null");
         store_.release_lock(*lock_opt);
         return outcome;
     }
+    rec.id = *rec_id;
 
     // Convert.
     auto result = engine_.convert(source_dng, output_dng, settings);
@@ -146,6 +261,8 @@ ReconversionOutcome Reconversion::execute(int64_t import_id,
         rec.error_message = "Conversion failed";
         store_.update_reconversion(rec);
         outcome.error = "Reconversion failed";
+        log_.LogImportFailed(std::to_string(import_id), outcome.error);
+        log_.LogConversionFailedEngineError(std::to_string(import_id), engine_.name(), -1, "engine returned null result");
         store_.release_lock(*lock_opt);
         return outcome;
     }
@@ -175,14 +292,23 @@ domain::ScanResult Scan::execute(const std::string& input_dir,
     auto files = fs_.list_directory(input_dir, "");
     std::set<std::string> seen_hashes;
 
-    for (const auto& fp : files) {
-        bool is_raw = false;
-        for (const auto& ext : supported_extensions) {
-            if (fp.extension() == ext) { is_raw = true; break; }
-        }
-        if (!is_raw) continue;
+    // Normalize supported extensions to lowercase for case-insensitive comparison.
+    std::set<std::string> normalized_exts;
+    for (const auto& ext : supported_extensions) {
+        std::string lower = ext;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        normalized_exts.insert(lower);
+    }
 
-        auto hash = fs_.sha256_file(fp);
+    for (const auto& fp : files) {
+        std::string ext = fp.extension();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (!normalized_exts.count(ext)) continue;
+
+        int hash_errno = 0;
+        auto hash = fs_.sha256_file(fp, &hash_errno);
         if (!hash) continue;
 
         auto hhex = domain::sha256_hex(*hash);
@@ -219,6 +345,7 @@ RotationOutcome Rotation::execute(int64_t import_id, int orientation) {
     bool pushed = sink_.push_orientation(import_id, orientation);
     if (!pushed) {
         outcome.error = "Failed to push orientation to rotation sink";
+        log_.LogRotationPushFailed(std::to_string(import_id), "immich", outcome.error);
         log_.error(outcome.error);
         return outcome;
     }
@@ -253,8 +380,14 @@ StatsSnapshot Stats::compute() {
 ConfigValidate::ConfigValidate(domain::ConfigProvider& cfg) : cfg_(cfg) {}
 
 domain::ValidationReport ConfigValidate::execute() {
-    auto report = cfg_.validate(domain::required_config_keys());
-    return report;
+    std::map<std::string, std::string> cfg;
+    const std::vector<std::string> keys = {"OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
+                                           "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER"};
+    for (const auto& k : keys) {
+        auto v = cfg_.get_string(k);
+        if (v) cfg["RAWIMPORT_" + k] = *v;
+    }
+    return domain::validate_config(cfg);
 }
 
 } // namespace rawimport::use_cases

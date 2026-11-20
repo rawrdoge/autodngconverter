@@ -3,12 +3,13 @@
  */
 #ifdef WITH_POSTGRESQL
 
+#include <libpq-fe.h>
 #include "infrastructure/postgresql_import_store.hpp"
 
-#include <libpq-fe.h>
 #include <sstream>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
 
 namespace rawimport::infrastructure {
 
@@ -32,9 +33,9 @@ std::string pg_error(PGconn* conn) {
 }
 
 std::string pg_escape(PGconn* conn, const std::string& s) {
-    char* escaped = PQescapeStringConn(conn, s.c_str(), s.size(), nullptr, nullptr);
-    std::string out(escaped ? escaped : "");
-    if (escaped) PQfreemem(escaped);
+    std::string out(s.size() * 2 + 1, '\0');
+    size_t len = PQescapeStringConn(conn, &out[0], s.c_str(), s.size(), nullptr);
+    out.resize(len);
     return out;
 }
 
@@ -48,18 +49,67 @@ std::string timestamp_now() {
     return std::string(buf);
 }
 
+// Parse PostgreSQL TIMESTAMPTZ string to time_point
+static domain::Instant parse_pg_timestamp(const char* str) {
+    if (!str || !*str) return domain::Instant{};
+    struct tm tm{};
+    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS[.us]+TZ" or "YYYY-MM-DD HH:MM:SS+TZ"
+    // We'll parse the main part and ignore microseconds and timezone for simplicity
+    int year, month, day, hour, min, sec;
+    if (sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = 0;
+        return std::chrono::system_clock::from_time_t(timegm(&tm));
+    }
+    return domain::Instant{};
+}
+
 domain::ImportRecord row_to_import(char** values, int nfields) {
     domain::ImportRecord r;
-    if (!values || nfields < 10) return r;
-    r.sequence_id      = values[0] ? std::atoll(values[0]) : -1;
-    r.source_path.native = values[1] ? values[1] : "";
-    r.output_path.native = values[2] ? values[2] : "";
-    r.status           = values[3] ? static_cast<domain::ImportStatus>(std::atoi(values[3]))
-                                   : domain::ImportStatus::Queued;
-    r.error_message    = values[4] ? values[4] : "";
-    r.created_at       = domain::now();
-    r.started_at       = domain::now();
-    r.completed_at     = domain::now();
+    // imports table has 22 columns (0-21): id, sequence_id, source_path, source_hash,
+    // output_path, output_hash, camera_model, capture_date, capture_time, date_source,
+    // folder_schema, conversion_settings, status, created_at, started_at, completed_at,
+    // error_message, last_preview_edit_at, orientation, source_fingerprint_size,
+    // source_fingerprint_mtime, source_fingerprint_fnv1a
+    if (!values || nfields < 22) return r;
+    r.sequence_id      = values[1] ? std::atoll(values[1]) : -1;  // sequence_id is column 2
+    r.source_path.native = values[2] ? values[2] : "";
+    // source_hash is column 4 (index 3)
+    if (values[3] && strlen(values[3]) == 64) {
+        // Parse hex string to SHA256Hash
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {values[3][i*2], values[3][i*2+1], 0};
+            r.source_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
+    }
+    r.output_path.native = values[4] ? values[4] : "";
+    // output_hash is column 6 (index 5)
+    if (values[5] && strlen(values[5]) == 64) {
+        for (int i = 0; i < 32; ++i) {
+            char byte_str[3] = {values[5][i*2], values[5][i*2+1], 0};
+            r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
+        }
+    }
+    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
+                                   : domain::ImportStatus::Queued;  // status is column 13
+    r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
+    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
+    if (values[19]) r.source_fingerprint.size_bytes = std::atoll(values[19]);
+    if (values[20]) {
+        auto secs = std::atoll(values[20]);
+        r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
+    }
+    if (values[21]) r.source_fingerprint.fnv1a = std::atoll(values[21]);
+    // Timestamps: created_at (14), started_at (15), completed_at (16) - indices 13, 14, 15
+    // PostgreSQL TIMESTAMPTZ format: "YYYY-MM-DD HH:MM:SS+TZ"
+    r.created_at       = values[13] ? parse_pg_timestamp(values[13]) : domain::now();
+    r.started_at       = values[14] ? parse_pg_timestamp(values[14]) : domain::Instant{};
+    r.completed_at     = values[15] ? parse_pg_timestamp(values[15]) : domain::Instant{};
     return r;
 }
 
@@ -70,35 +120,36 @@ PostgresqlImportStore::PostgresqlImportStore(std::string conninfo)
 
 PostgresqlImportStore::~PostgresqlImportStore() = default;
 
-PGconn* PostgresqlImportStore::connect_() const {
-    return pg_connect(conninfo_);
+PgConnHandle PostgresqlImportStore::connect_() const {
+    return reinterpret_cast<PgConnHandle>(pg_connect(conninfo_));
 }
 
-void PostgresqlImportStore::drop_(PGconn* conn) const {
-    pg_drop(conn);
+void PostgresqlImportStore::drop_(PgConnHandle conn) const {
+    pg_drop(reinterpret_cast<PGconn*>(conn));
 }
 
-std::string PostgresqlImportStore::pg_error_(PGconn* conn) const {
-    return pg_error(conn);
-}
-
-std::string PostgresqlImportStore::sql_escape(const std::string& s) const {
-    return "\"" + s + "\""; // simplified — use prepared statements in prod
+std::string PostgresqlImportStore::pg_error_(PgConnHandle conn) const {
+    return pg_error(reinterpret_cast<PGconn*>(conn));
 }
 
 // ── imports ───────────────────────────────────────────────────────────────────
 std::optional<int64_t> PostgresqlImportStore::create_import(const domain::ImportRecord& rec) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
+    std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, output_path, status, error_message,"
-           " source_fingerprint_size, source_fingerprint_mtime_epoch, source_fingerprint_fnv1a,"
+    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
+           " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
-           << " VALUES ('" << pg_escape(conn, rec.source_path.native) << "',"
-           << "' " << pg_escape(conn, rec.output_path.native) << "',"
+           << " VALUES ('" << pg_escape(pgconn, rec.source_path.native) << "',"
+           << "'" << source_hash_hex << "',"
+           << "'" << pg_escape(pgconn, rec.output_path.native) << "',"
+           << "'" << output_hash_hex << "',"
            << static_cast<int>(rec.status) << ","
-           << "'" << pg_escape(conn, rec.error_message) << "',"
+           << "'" << pg_escape(pgconn, rec.error_message) << "',"
            << rec.source_fingerprint.size_bytes << ","
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ","
            << rec.source_fingerprint.fnv1a << ","
@@ -107,7 +158,7 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
            << "'" << timestamp_now() << "'"
            << ") RETURNING sequence_id";
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         PQclear(res); drop_(conn); return std::nullopt;
     }
@@ -119,14 +170,46 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
 std::optional<domain::ImportRecord> PostgresqlImportStore::get_import(int64_t id) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    PGresult* res = PQexecParams(conn,
+    std::string id_str = std::to_string(id);
+    const char* params[1] = {id_str.c_str()};
+    PGresult* res = PQexecParams(pgconn,
         "SELECT * FROM imports WHERE sequence_id=$1", 1,
-        nullptr, &id, nullptr, nullptr, 0);
+        nullptr, params, nullptr, nullptr, 0);
     if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
         PQclear(res); drop_(conn); return std::nullopt;
     }
-    auto rec = row_to_import(PQgetvalues(res, 0, nullptr), PQnfields(res));
+    // Build values array for row_to_import
+    int nfields = PQnfields(res);
+    std::vector<char*> values(nfields);
+    for (int i = 0; i < nfields; ++i) {
+        values[i] = PQgetvalue(res, 0, i);
+    }
+    auto rec = row_to_import(values.data(), nfields);
+    PQclear(res); drop_(conn);
+    return rec;
+}
+
+std::optional<domain::ImportRecord> PostgresqlImportStore::find_import_by_source_hash(const domain::SHA256Hash& hash) {
+    auto conn = connect_();
+    if (!conn) return std::nullopt;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    std::string hash_hex = domain::sha256_hex(hash);
+    const char* params[1] = {hash_hex.c_str()};
+    PGresult* res = PQexecParams(pgconn,
+        "SELECT * FROM imports WHERE source_hash=$1 LIMIT 1", 1,
+        nullptr, params, nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        PQclear(res); drop_(conn); return std::nullopt;
+    }
+    int nfields = PQnfields(res);
+    std::vector<char*> values(nfields);
+    for (int i = 0; i < nfields; ++i) {
+        values[i] = PQgetvalue(res, 0, i);
+    }
+    auto rec = row_to_import(values.data(), nfields);
     PQclear(res); drop_(conn);
     return rec;
 }
@@ -134,18 +217,20 @@ std::optional<domain::ImportRecord> PostgresqlImportStore::get_import(int64_t id
 bool PostgresqlImportStore::update_import(domain::ImportRecord rec) {
     auto conn = connect_();
     if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    PGresult* res = PQexecParams(conn,
-        "UPDATE imports SET status=$1, error_message=$2, output_path=$3,"
-        " completed_at=$4 WHERE sequence_id=$5",
-        5, nullptr,
-        reinterpret_cast<const char* const[]>{
-            std::to_string(static_cast<int>(rec.status)).c_str(),
-            pg_escape(conn, rec.error_message).c_str(),
-            pg_escape(conn, rec.output_path.native).c_str(),
-            timestamp_now().c_str(),
-            std::to_string(rec.sequence_id).c_str()},
-        nullptr, nullptr, 0);
+    std::string status_str = std::to_string(static_cast<int>(rec.status));
+    std::string error_str = pg_escape(pgconn, rec.error_message);
+    std::string output_str = pg_escape(pgconn, rec.output_path.native);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
+    std::string completed_str = timestamp_now();
+    std::string id_str = std::to_string(rec.sequence_id);
+
+    const char* params[6] = {status_str.c_str(), error_str.c_str(), output_str.c_str(), output_hash_hex.c_str(), completed_str.c_str(), id_str.c_str()};
+
+    PGresult* res = PQexecParams(pgconn,
+        "UPDATE imports SET status=$1, error_message=$2, output_path=$3, output_hash=$4, completed_at=$5 WHERE sequence_id=$6",
+        6, nullptr, params, nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     PQclear(res); drop_(conn);
     return ok;
@@ -155,6 +240,7 @@ std::vector<domain::ImportRecord> PostgresqlImportStore::list_imports(
         std::optional<domain::ImportStatus> status_filter) {
     auto conn = connect_();
     if (!conn) return {};
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     std::ostringstream sql;
     sql << "SELECT * FROM imports";
@@ -162,13 +248,19 @@ std::vector<domain::ImportRecord> PostgresqlImportStore::list_imports(
         sql << " WHERE status=" << static_cast<int>(*status_filter);
     sql << " ORDER BY sequence_id DESC";
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         PQclear(res); drop_(conn); return {};
     }
     std::vector<domain::ImportRecord> result;
-    for (int i = 0; i < PQntuples(res); ++i)
-        result.push_back(row_to_import(PQgetvalues(res, i, nullptr), PQnfields(res)));
+    for (int i = 0; i < PQntuples(res); ++i) {
+        int nfields = PQnfields(res);
+        std::vector<char*> values(nfields);
+        for (int j = 0; j < nfields; ++j) {
+            values[j] = PQgetvalue(res, i, j);
+        }
+        result.push_back(row_to_import(values.data(), nfields));
+    }
     PQclear(res); drop_(conn);
     return result;
 }
@@ -177,32 +269,71 @@ std::vector<domain::ImportRecord> PostgresqlImportStore::list_imports(
 std::optional<int64_t> PostgresqlImportStore::create_reconversion(const domain::ReconversionRecord& rec) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    PGresult* res = PQexecParams(conn,
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    std::string import_id_str = std::to_string(rec.import_id);
+    std::string source_str = pg_escape(pgconn, rec.source_dng_path.native);
+    std::string output_str = pg_escape(pgconn, rec.output_dng_path.native);
+    std::string status_str = std::to_string(static_cast<int>(rec.status));
+    std::string error_str = pg_escape(pgconn, rec.error_message);
+    std::string scheduled_str = timestamp_now();
+    std::string started_str = timestamp_now();
+    std::string completed_str = timestamp_now();
+
+    const char* params[8] = {import_id_str.c_str(), source_str.c_str(), output_str.c_str(),
+                            status_str.c_str(), error_str.c_str(),
+                            scheduled_str.c_str(), started_str.c_str(), completed_str.c_str()};
+
+    PGresult* res = PQexecParams(pgconn,
         "INSERT INTO reconversions (import_id, source_dng_path, output_dng_path,"
         " status, error_message, scheduled_at, started_at, completed_at)"
         " VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-        8, nullptr,
-        reinterpret_cast<const char* const*>{
-            std::to_string(rec.import_id).c_str(),
-            pg_escape(conn, rec.source_dng_path.native).c_str(),
-            pg_escape(conn, rec.output_dng_path.native).c_str(),
-            std::to_string(static_cast<int>(rec.status)).c_str(),
-            pg_escape(conn, rec.error_message).c_str(),
-            timestamp_now().c_str(),
-            timestamp_now().c_str(),
-            timestamp_now().c_str()},
-        nullptr, nullptr, 0);
+        8, nullptr, params, nullptr, nullptr, 0);
     if (PQresultStatus(res) != PGRES_TUPLES_OK) { PQclear(res); drop_(conn); return std::nullopt; }
     int64_t id = std::atoll(PQgetvalue(res, 0, 0));
     PQclear(res); drop_(conn);
     return id;
 }
 
-std::optional<domain::ReconversionRecord> PostgresqlImportStore::get_reconversion(int64_t) {
-    return std::nullopt; // placeholder
+std::optional<domain::ReconversionRecord> PostgresqlImportStore::get_reconversion(int64_t id) {
+    auto conn = connect_();
+    if (!conn) return std::nullopt;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    std::string id_str = std::to_string(id);
+    const char* params[1] = {id_str.c_str()};
+
+    PGresult* res = PQexecParams(pgconn,
+        "SELECT * FROM reconversions WHERE id=$1", 1, nullptr,
+        params, nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        PQclear(res); drop_(conn); return std::nullopt;
+    }
+
+    // For now return placeholder - full implementation would parse the row
+    PQclear(res); drop_(conn);
+    return std::nullopt;
 }
 
-bool PostgresqlImportStore::update_reconversion(domain::ReconversionRecord) { return false; }
+bool PostgresqlImportStore::update_reconversion(domain::ReconversionRecord rec) {
+    auto conn = connect_();
+    if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    std::string status_str = std::to_string(static_cast<int>(rec.status));
+    std::string error_str = pg_escape(pgconn, rec.error_message);
+    std::string completed_str = timestamp_now();
+    std::string id_str = std::to_string(rec.id);
+
+    const char* params[4] = {status_str.c_str(), error_str.c_str(), completed_str.c_str(), id_str.c_str()};
+
+    PGresult* res = PQexecParams(pgconn,
+        "UPDATE reconversions SET status=$1, error_message=$2, completed_at=$3 WHERE id=$4",
+        4, nullptr, params, nullptr, nullptr, 0);
+    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    PQclear(res); drop_(conn);
+    return ok;
+}
 
 std::vector<domain::ReconversionRecord> PostgresqlImportStore::list_reconversions(int64_t import_id) {
     (void)import_id;
@@ -227,54 +358,87 @@ std::vector<domain::Alert> PostgresqlImportStore::list_alerts(std::optional<int6
 std::optional<int64_t> PostgresqlImportStore::acquire_lock(int64_t import_id, const std::string& holder) {
     auto conn = connect_();
     if (!conn) return std::nullopt;
-    // Use pg_try_advisory_xact_lock for automatic release on transaction end.
-    int lock_arg = static_cast<int>(import_id & 0x7FFFFFFF);
-    PGresult* res = PQexecParams(conn,
-        "SELECT pg_try_advisory_xact_lock($1)", 1,
-        nullptr, reinterpret_cast<const char* const*>(&lock_arg),
-        nullptr, nullptr, 0);
-    bool acquired = (PQresultStatus(res) == PGRES_TUPLES_OK &&
-                     PQgetvalue(res, 0, 0)[0] == 't');
-    PQclear(res); drop_(conn);
-    if (!acquired) return std::nullopt;
-    // Insert lock record.
-    res = PQexecParams(conn,
-        "INSERT INTO locks (import_id, holder, acquired_at, expires_at) VALUES ($1,$2,$3,$4) RETURNING id",
-        4, nullptr,
-        reinterpret_cast<const char* const*>{
-            std::to_string(import_id).c_str(),
-            pg_escape(conn, holder).c_str(),
-            timestamp_now().c_str(),
-            timestamp_now().c_str()},
-        nullptr, nullptr, 0);
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    // Use a transaction to atomically check for existing lock and insert new one.
+    // The locks table has a partial unique index on import_id WHERE released_at IS NULL.
+    PGresult* res = PQexec(pgconn, "BEGIN");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        PQclear(res); drop_(conn); return std::nullopt;
+    }
+    PQclear(res);
+
+    std::string import_id_str = std::to_string(import_id);
+    std::string holder_str = pg_escape(pgconn, holder);
+    std::string acquired_str = timestamp_now();
+    // expires_at = acquired_at + 1 hour
+    std::string expires_str = "NOW() + INTERVAL '1 hour'";
+
+    const char* params[3] = {import_id_str.c_str(), holder_str.c_str(), acquired_str.c_str()};
+
+    // Try to insert lock. The partial unique index on (import_id) WHERE released_at IS NULL
+    // will prevent duplicate active locks for the same import_id.
+    res = PQexecParams(pgconn,
+        "INSERT INTO locks (import_id, holder, acquired_at, expires_at) "
+        "VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') "
+        "ON CONFLICT (import_id) WHERE released_at IS NULL DO NOTHING "
+        "RETURNING id",
+        3, nullptr, params, nullptr, nullptr, 0);
+
+    bool ok = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
     int64_t lock_id = -1;
-    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
+    if (ok) {
         lock_id = std::atoll(PQgetvalue(res, 0, 0));
-    PQclear(res); drop_(conn);
+    }
+    PQclear(res);
+
+    if (!ok) {
+        // Lock acquisition failed (conflict)
+        PQexec(pgconn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
+
+    // Commit the transaction - the lock record is now persisted.
+    // The lock is held by the database record, not by a session-scoped advisory lock.
+    res = PQexec(pgconn, "COMMIT");
+    bool committed = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    PQclear(res);
+    drop_(conn);
+
+    if (!committed) return std::nullopt;
     return lock_id;
 }
 
 bool PostgresqlImportStore::release_lock(int64_t lock_id) {
     auto conn = connect_();
     if (!conn) return false;
-    PGresult* res = PQexecParams(conn,
-        "DELETE FROM locks WHERE id=$1 AND released_at IS NULL",
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    std::string lock_id_str = std::to_string(lock_id);
+    const char* params[1] = {lock_id_str.c_str()};
+
+    // Mark lock as released in the database
+    PGresult* res = PQexecParams(pgconn,
+        "UPDATE locks SET released_at=NOW() WHERE id=$1 AND released_at IS NULL",
         1, nullptr,
-        reinterpret_cast<const char* const*>(&lock_id),
-        nullptr, nullptr, 0);
-    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
-    PQclear(res); drop_(conn);
+        params, nullptr, nullptr, 0);
+    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK && std::atoi(PQcmdTuples(res)) > 0);
+    PQclear(res);
+    drop_(conn);
     return ok;
 }
 
 bool PostgresqlImportStore::is_locked(int64_t import_id) {
     auto conn = connect_();
     if (!conn) return false;
-    PGresult* res = PQexecParams(conn,
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+    std::string import_id_str = std::to_string(import_id);
+    const char* params[1] = {import_id_str.c_str()};
+    PGresult* res = PQexecParams(pgconn,
         "SELECT COUNT(*) FROM locks WHERE import_id=$1 AND released_at IS NULL",
         1, nullptr,
-        reinterpret_cast<const char* const*>(&import_id),
-        nullptr, nullptr, 0);
+        params, nullptr, nullptr, 0);
     bool locked = (PQresultStatus(res) == PGRES_TUPLES_OK &&
                    PQgetvalue(res, 0, 0)[0] != '0');
     PQclear(res); drop_(conn);
@@ -287,7 +451,8 @@ std::vector<domain::Lock> PostgresqlImportStore::list_active_locks() { return {}
 int64_t PostgresqlImportStore::next_sequence_id() {
     auto conn = connect_();
     if (!conn) return -1;
-    PGresult* res = PQexec(conn, "SELECT NEXTVAL('imports_sequence_id_seq')");
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+    PGresult* res = PQexec(pgconn, "SELECT NEXTVAL('imports_sequence_id_seq')");
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         PQclear(res); drop_(conn); return 1;
     }
@@ -310,12 +475,150 @@ domain::HealthReport PostgresqlImportStore::health_check() {
     auto conn = connect_();
     if (!conn)
         return {domain::HealthStatus::Unhealthy, "PostgreSQL connection failed", domain::now()};
-    PGresult* res = PQexec(conn, "SELECT 1");
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+    PGresult* res = PQexec(pgconn, "SELECT 1");
     bool ok = (PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res); drop_(conn);
     return ok
         ? (domain::HealthReport{domain::HealthStatus::Healthy, "PostgreSQL OK", domain::now()})
         : (domain::HealthReport{domain::HealthStatus::Unhealthy, "PostgreSQL SELECT 1 failed", domain::now()});
+}
+
+// ── schema initialization ──────────────────────────────────────────────────
+bool PostgresqlImportStore::init_schema() {
+    auto conn = connect_();
+    if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    // PostgreSQL schema (libpq compatible)
+    const char* schema_sql[] = {
+        // sequences
+        "CREATE TABLE IF NOT EXISTS sequences ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    name VARCHAR(32) NOT NULL UNIQUE,"
+        "    created_at TIMESTAMPTZ DEFAULT NOW()"
+        ")",
+        // imports
+        "CREATE TABLE IF NOT EXISTS imports ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    sequence_id BIGINT NOT NULL,"
+        "    source_path TEXT NOT NULL,"
+        "    source_hash CHAR(64) NOT NULL,"
+        "    output_path TEXT NOT NULL,"
+        "    output_hash CHAR(64) NOT NULL,"
+        "    camera_model VARCHAR(64),"
+        "    capture_date DATE,"
+        "    capture_time TIME,"
+        "    date_source VARCHAR(16) NOT NULL DEFAULT 'exif',"
+        "    folder_schema VARCHAR(16),"
+        "    conversion_settings JSONB,"
+        "    status VARCHAR(32) NOT NULL DEFAULT 'pending',"
+        "    created_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    started_at TIMESTAMPTZ,"
+        "    completed_at TIMESTAMPTZ,"
+        "    error_message TEXT,"
+        "    last_preview_edit_at TIMESTAMPTZ,"
+        "    orientation SMALLINT,"
+        "    source_fingerprint_size BIGINT,"
+        "    source_fingerprint_mtime BIGINT,"
+        "    source_fingerprint_fnv1a BIGINT"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_imports_source_hash ON imports(source_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_imports_output_hash ON imports(output_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_imports_sequence_id ON imports(sequence_id)",
+        "CREATE INDEX IF NOT EXISTS idx_imports_capture_date ON imports(capture_date)",
+        "CREATE INDEX IF NOT EXISTS idx_imports_status_created ON imports(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_imports_camera_date ON imports(camera_model, capture_date)",
+        // reconversions
+        "CREATE TABLE IF NOT EXISTS reconversions ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    import_id BIGINT NOT NULL,"
+        "    previous_output_hash CHAR(64) NOT NULL,"
+        "    new_output_hash CHAR(64),"
+        "    conversion_settings JSONB NOT NULL,"
+        "    reason TEXT,"
+        "    triggered_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    scheduled_at TIMESTAMPTZ,"
+        "    started_at TIMESTAMPTZ,"
+        "    completed_at TIMESTAMPTZ,"
+        "    status VARCHAR(32) NOT NULL DEFAULT 'pending',"
+        "    error_message TEXT"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_reconversions_import_id ON reconversions(import_id)",
+        "CREATE INDEX IF NOT EXISTS idx_reconversions_status ON reconversions(status)",
+        // locks
+        "CREATE TABLE IF NOT EXISTS locks ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    import_id BIGINT NOT NULL,"
+        "    holder VARCHAR(64),"
+        "    acquired_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    expires_at TIMESTAMPTZ NOT NULL,"
+        "    released_at TIMESTAMPTZ"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_locks_import_id ON locks(import_id)",
+        "CREATE INDEX IF NOT EXISTS idx_locks_expires ON locks(expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_locks_released ON locks(released_at) WHERE released_at IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_locks_import_id_active ON locks(import_id) WHERE released_at IS NULL",
+        // alerts
+        "CREATE TABLE IF NOT EXISTS alerts ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    severity VARCHAR(16) NOT NULL,"
+        "    category VARCHAR(32) NOT NULL,"
+        "    message TEXT NOT NULL,"
+        "    ref_sequence VARCHAR(32),"
+        "    created_at TIMESTAMPTZ DEFAULT NOW(),"
+        "    acknowledged BOOLEAN DEFAULT FALSE"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_alerts_severity_created ON alerts(severity, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged ON alerts(acknowledged)",
+        // preview_edits
+        "CREATE TABLE IF NOT EXISTS preview_edits ("
+        "    id BIGSERIAL PRIMARY KEY,"
+        "    import_id BIGINT NOT NULL,"
+        "    worker VARCHAR(16) NOT NULL,"
+        "    previous_output_hash CHAR(64) NOT NULL,"
+        "    new_output_hash CHAR(64) NOT NULL,"
+        "    preview_width INT,"
+        "    preview_height INT,"
+        "    preview_quality SMALLINT,"
+        "    edited_at TIMESTAMPTZ DEFAULT NOW()"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_preview_edits_import_id ON preview_edits(import_id)",
+        "CREATE INDEX IF NOT EXISTS idx_preview_edits_edited_at ON preview_edits(edited_at)",
+        // foreign keys
+        "DO $$ BEGIN "
+        "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_imports_sequence') THEN "
+        "    ALTER TABLE imports ADD CONSTRAINT fk_imports_sequence "
+        "    FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE RESTRICT; "
+        "  END IF; "
+        "END $$",
+        "DO $$ BEGIN "
+        "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_reconversions_import') THEN "
+        "    ALTER TABLE reconversions ADD CONSTRAINT fk_reconversions_import "
+        "    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE; "
+        "  END IF; "
+        "END $$",
+        "DO $$ BEGIN "
+        "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_preview_edits_import') THEN "
+        "    ALTER TABLE preview_edits ADD CONSTRAINT fk_preview_edits_import "
+        "    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE; "
+        "  END IF; "
+        "END $$",
+    };
+
+    for (const char* sql : schema_sql) {
+        PGresult* res = PQexec(pgconn, sql);
+        if (PQresultStatus(res) != PGRES_COMMAND_OK && PQresultStatus(res) != PGRES_TUPLES_OK) {
+            std::cerr << "Schema init failed: " << PQerrorMessage(pgconn) << " (SQL: " << sql << ")\n";
+            PQclear(res);
+            drop_(conn);
+            return false;
+        }
+        PQclear(res);
+    }
+
+    drop_(conn);
+    return true;
 }
 
 // ── migration streaming helpers ──────────────────────────────────────────────
@@ -324,6 +627,7 @@ PostgresqlImportStore::list_migration_rows(const std::string& table,
                                            const std::vector<std::string>& columns) {
     auto conn = connect_();
     if (!conn) return {};
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     std::ostringstream sql;
     sql << "SELECT ";
@@ -331,9 +635,9 @@ PostgresqlImportStore::list_migration_rows(const std::string& table,
         if (i) sql << ", ";
         sql << "\"" << columns[i] << "\"";
     }
-    sql << " FROM \"" << table << "\"";
+    sql << " FROM \"" << table << "\" ORDER BY \"id\"";
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     drop_(conn);
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         PQclear(res);
@@ -356,11 +660,12 @@ PostgresqlImportStore::list_migration_rows(const std::string& table,
 int64_t PostgresqlImportStore::count_migration_rows(const std::string& table) {
     auto conn = connect_();
     if (!conn) return -1;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     std::ostringstream sql;
     sql << "SELECT COUNT(*) FROM \"" << table << "\"";
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     drop_(conn);
     if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
         PQclear(res);
@@ -378,6 +683,7 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
 
     auto conn = connect_();
     if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     std::ostringstream cols;
     for (size_t i = 0; i < columns.size(); ++i) {
@@ -385,7 +691,7 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
         cols << "\"" << columns[i] << "\"";
     }
 
-    // Build multi-row INSERT with parameterized values to avoid escaping issues
+    // Build multi-row INSERT with properly quoted values
     std::ostringstream sql;
     sql << "INSERT INTO \"" << table << "\" (" << cols.str() << ") VALUES ";
 
@@ -394,12 +700,18 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
         sql << "(";
         for (size_t c = 0; c < columns.size(); ++c) {
             if (c) sql << ", ";
-            sql << pg_escape(conn, values[r][c]);
+            std::string val = values[r][c];
+            // Empty string -> NULL, otherwise quote the escaped value
+            if (val.empty()) {
+                sql << "NULL";
+            } else {
+                sql << "'" << pg_escape(pgconn, val) << "'";
+            }
         }
         sql << ")";
     }
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     PQclear(res);
     drop_(conn);
@@ -409,6 +721,7 @@ bool PostgresqlImportStore::bulk_insert_migration(const std::string& table,
 int64_t PostgresqlImportStore::get_max_pk(const std::string& table) {
     auto conn = connect_();
     if (!conn) return -1;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     // Try common PK column names
     static const char* pk_names[] = {"id", "sequence_id", "seq"};
@@ -418,7 +731,7 @@ int64_t PostgresqlImportStore::get_max_pk(const std::string& table) {
         std::ostringstream sql;
         sql << "SELECT COALESCE(MAX(\"" << pk << "\"), -1) FROM \"" << table << "\"";
 
-        PGresult* res = PQexec(conn, sql.str().c_str());
+        PGresult* res = PQexec(pgconn, sql.str().c_str());
         if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
             int64_t val = std::atoll(PQgetvalue(res, 0, 0));
             if (val > max_val) max_val = val;
@@ -433,8 +746,9 @@ int64_t PostgresqlImportStore::get_max_pk(const std::string& table) {
 bool PostgresqlImportStore::execute_migration_sql(const std::string& sql) {
     auto conn = connect_();
     if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    PGresult* res = PQexec(conn, sql.c_str());
+    PGresult* res = PQexec(pgconn, sql.c_str());
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK || PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res);
     drop_(conn);
@@ -444,8 +758,9 @@ bool PostgresqlImportStore::execute_migration_sql(const std::string& sql) {
 bool PostgresqlImportStore::table_exists(const std::string& table) {
     auto conn = connect_();
     if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    PGresult* res = PQexec(conn, ("SELECT 1 FROM \"" + table + "\" LIMIT 1").c_str());
+    PGresult* res = PQexec(pgconn, ("SELECT 1 FROM \"" + table + "\" LIMIT 1").c_str());
     bool exists = (PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res);
     drop_(conn);
@@ -455,6 +770,7 @@ bool PostgresqlImportStore::table_exists(const std::string& table) {
 int PostgresqlImportStore::expire_stale_locks(int64_t max_age_seconds) {
     auto conn = connect_();
     if (!conn) return 0;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
     // Use advisory locks + locks table expiration
     std::ostringstream sql;
@@ -462,7 +778,7 @@ int PostgresqlImportStore::expire_stale_locks(int64_t max_age_seconds) {
         << "WHERE released_at IS NULL "
         << "AND expires_at < NOW() - INTERVAL '" << max_age_seconds << " seconds'";
 
-    PGresult* res = PQexec(conn, sql.str().c_str());
+    PGresult* res = PQexec(pgconn, sql.str().c_str());
     int affected = 0;
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
         affected = std::atoi(PQcmdTuples(res));
@@ -470,6 +786,48 @@ int PostgresqlImportStore::expire_stale_locks(int64_t max_age_seconds) {
     PQclear(res);
     drop_(conn);
     return affected;
+}
+
+int64_t PostgresqlImportStore::count_active_locks() {
+    // Determine which lock table exists on this database, then count active rows.
+    auto conn = connect_();
+    if (!conn) return -1;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    PGresult* res = PQexec(pgconn,
+        "SELECT CASE "
+        " WHEN EXISTS (SELECT 1 FROM information_schema.tables "
+        "              WHERE table_name='locks' AND table_schema='public') "
+        "   THEN 'locks' "
+        " WHEN EXISTS (SELECT 1 FROM information_schema.tables "
+        "              WHERE table_name='processing_locks' AND table_schema='public') "
+        "   THEN 'processing_locks' "
+        " ELSE '' END AS tname");
+    if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+        PQclear(res);
+        drop_(conn);
+        return -1;
+    }
+    std::string tbl(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    if (tbl.empty()) {
+        drop_(conn);
+        return 0;
+    }
+
+    std::ostringstream sql;
+    if (tbl == "locks")
+        sql << "SELECT COUNT(*) FROM \"locks\" WHERE released_at IS NULL";
+    else
+        sql << "SELECT COUNT(*) FROM \"processing_locks\"";
+
+    res = PQexec(pgconn, sql.str().c_str());
+    int64_t count = -1;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0)
+        count = std::atoll(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    drop_(conn);
+    return count;
 }
 
 } // namespace rawimport::infrastructure

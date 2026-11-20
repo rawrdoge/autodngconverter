@@ -18,6 +18,7 @@ namespace rawimport::infrastructure {
 struct CounterEntry {
     std::atomic<int64_t> value{0};
     std::map<std::string, std::string> labels;
+    std::string name;
 };
 
 // Internal histogram bucket entry.
@@ -25,6 +26,7 @@ struct HistogramEntry {
     double             sum{0.0};
     int64_t            count{0};
     std::map<std::string, std::string> labels;
+    std::string name;
 };
 
 class PrometheusMetricsSink final : public domain::MetricsSink {

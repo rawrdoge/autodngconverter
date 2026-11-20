@@ -6,6 +6,8 @@
 #include <string>
 #include <optional>
 
+#include "domain/types.hpp"
+
 namespace rawimport::domain {
 
 class RotationSink {

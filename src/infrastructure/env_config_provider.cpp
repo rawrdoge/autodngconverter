@@ -12,6 +12,7 @@ namespace rawimport::infrastructure {
 EnvConfigProvider::EnvConfigProvider(std::string prefix) : prefix_(std::move(prefix)) {}
 
 std::string EnvConfigProvider::resolve_key(const std::string& key) const {
+    // Only accept RAWIMPORT_ prefixed keys. Legacy unprefixed keys are not supported.
     return prefix_ + key;
 }
 
@@ -51,28 +52,21 @@ std::map<std::string, std::string> EnvConfigProvider::to_map() {
     // getenv doesn't enumerate, so we expose known keys.
     const std::vector<std::string> known = {
         "OUTPUT_DIR", "INPUT_DIR", "CONVERTER_ENGINE",
-        "DB_CONNECTION", "DATABASE_URL",
+        "DB_CONNECTION", "DATABASE_URL", "DB_DRIVER",
         "LOG_LEVEL", "MAX_WORKERS",
         "IMMICH_BASE_URL", "IMMICH_API_KEY",
         "EXIFTOOL_PATH", "DNGLAB_PATH", "ADOBE_DNG_PATH",
     };
     for (const auto& k : known) {
         auto v = get_string(k);
-        if (v) out[k] = *v;
+        if (v) out[prefix_ + k] = *v;
     }
     return out;
 }
 
 domain::ValidationReport EnvConfigProvider::validate(const std::vector<domain::RequiredConfigKey>& required) {
-    domain::ValidationReport report;
-    for (const auto& rk : required) {
-        auto v = get_string(rk.name);
-        if (!v || v->empty()) {
-            report.missing_keys.push_back(rk.name);
-        }
-    }
-    report.valid = report.missing_keys.empty();
-    return report;
+    // Use domain-level validation with the prefixed map from to_map()
+    return domain::validate_config(to_map());
 }
 
 } // namespace rawimport::infrastructure

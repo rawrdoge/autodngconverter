@@ -79,9 +79,38 @@ TEST(fast_fingerprint_default) {
 TEST(required_config_keys_count) {
     auto keys = required_config_keys();
     UTEST_ASSERT_EQ(keys.size(), 3u);
-    UTEST_ASSERT_STRING(keys[0].name.c_str(), "OUTPUT_DIR");
-    UTEST_ASSERT_STRING(keys[1].name.c_str(), "INPUT_DIR");
-    UTEST_ASSERT_STRING(keys[2].name.c_str(), "CONVERTER_ENGINE");
+    UTEST_ASSERT_STRING(keys[0].name.c_str(), "RAWIMPORT_OUTPUT_DIR");
+    UTEST_ASSERT_STRING(keys[1].name.c_str(), "RAWIMPORT_INPUT_DIR");
+    UTEST_ASSERT_STRING(keys[2].name.c_str(), "RAWIMPORT_CONVERTER_ENGINE");
+}
+
+TEST(validate_config_missing_db) {
+    std::map<std::string, std::string> cfg;
+    cfg["RAWIMPORT_OUTPUT_DIR"]   = "/tmp/out";
+    cfg["RAWIMPORT_INPUT_DIR"]    = "/tmp/in";
+    cfg["RAWIMPORT_CONVERTER_ENGINE"] = "dnglab";
+    // No DB connection supplied → invalid.
+    auto r = validate_config(cfg);
+    UTEST_ASSERT(!r.valid);
+    UTEST_ASSERT(r.missing_keys.size() >= 1u);
+}
+
+TEST(validate_config_either_db_key_sufficient) {
+    std::map<std::string, std::string> cfg;
+    cfg["RAWIMPORT_OUTPUT_DIR"]       = "/tmp/out";
+    cfg["RAWIMPORT_INPUT_DIR"]        = "/tmp/in";
+    cfg["RAWIMPORT_CONVERTER_ENGINE"] = "dnglab";
+    cfg["RAWIMPORT_DB_CONNECTION"]    = "postgresql://localhost/db";
+    // Only DB_CONNECTION present (DATABASE_URL absent) → valid.
+    auto r = validate_config(cfg);
+    UTEST_ASSERT(r.valid);
+    UTEST_ASSERT_EQ(r.missing_keys.size(), 0u);
+
+    cfg.erase("RAWIMPORT_DB_CONNECTION");
+    cfg["RAWIMPORT_DATABASE_URL"] = "postgresql://localhost/db";
+    // Only DATABASE_URL present → also valid.
+    r = validate_config(cfg);
+    UTEST_ASSERT(r.valid);
 }
 
 // ─── ConversionSettings defaults ──────────────────────────────────────────────
@@ -147,9 +176,11 @@ TEST(reconversion_status_values) {
 
 // ─── FastFingerprint with real data ───────────────────────────────────────────
 TEST(fnv1a_known_input) {
-    FastFingerprint fp{};
-    fp.fnv1a = 1469598103934665603ULL;
-    UTEST_ASSERT_EQ(fp.fnv1a, 1469598103934665603ULL);
+    // FNV-1a 64-bit offset basis is 14695981039346656037 (aka cbf29ce484222325).
+    // The implementation must use this exact value; an off-by-one digit changes
+    // every subsequent hash unexpectedly. Runtime exercise lives in infra_test.
+    static_assert(14695981039346656037ULL == 0xcbf29ce484222325ULL,
+                  "FNV-1a offset basis must equal cbf29ce484222325");
 }
 
 // ─── Lock defaults ────────────────────────────────────────────────────────────

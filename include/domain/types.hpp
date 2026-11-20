@@ -99,7 +99,9 @@ struct ImportRecord {
     FilePath             output_path;
     ImportStatus         status        = ImportStatus::Queued;
     std::string          error_message;
-    FastFingerprint      source_fingerprint;
+    SHA256Hash           source_hash;          // Full SHA256 of source file
+    SHA256Hash           output_hash{};        // Full SHA256 of output file (zero = unset)
+    FastFingerprint      source_fingerprint;   // Size + mtime + FNV-1a of first 4KiB
     Instant              created_at;
     Instant              started_at;
     Instant              completed_at;
@@ -128,7 +130,7 @@ struct ReconversionRecord {
 // ─── Preview edit ─────────────────────────────────────────────────────────────
 struct PreviewEdit {
     int64_t     id{-1};
-    int64_t     import_id;
+    int64_t     import_id{0};
     FilePath    preview_path;
     ConversionSettings settings;
     Instant     created_at;
@@ -149,7 +151,7 @@ struct Alert {
 // ─── Lock ─────────────────────────────────────────────────────────────────────
 struct Lock {
     int64_t     id{-1};
-    int64_t     import_id;
+    int64_t     import_id{0};
     std::string holder;
     Instant     acquired_at;
     Instant     expires_at;
@@ -181,20 +183,42 @@ struct ValidationReport {
     std::vector<std::string> invalid_values;
 };
 
+inline std::vector<RequiredConfigKey> required_config_keys() {
+    return {
+        {"RAWIMPORT_OUTPUT_DIR",   "Destination directory for converted DNG files"},
+        {"RAWIMPORT_INPUT_DIR",    "Watched directory containing RAW source files"},
+        {"RAWIMPORT_CONVERTER_ENGINE", "Converter engine to use (dnglab | adobe_dng)"},
+    };
+}
+
+// Validate a configuration map against the full set of rules:
+//  - RAWIMPORT_OUTPUT_DIR, RAWIMPORT_INPUT_DIR, RAWIMPORT_CONVERTER_ENGINE are strictly required.
+//  - At least one of DB_CONNECTION or DATABASE_URL must be supplied.
+//  - DB_DRIVER is optional (defaults to "postgresql" at runtime).
+inline ValidationReport validate_config(const std::map<std::string, std::string>& cfg) {
+    ValidationReport report;
+    for (const auto& k : required_config_keys()) {
+        auto it = cfg.find(k.name);
+        if (it == cfg.end() || it->second.empty())
+            report.missing_keys.push_back(k.name);
+    }
+    const auto db_conn = cfg.find("RAWIMPORT_DB_CONNECTION");
+    const auto db_url  = cfg.find("RAWIMPORT_DATABASE_URL");
+    if ((db_conn == cfg.end() || db_conn->second.empty()) &&
+        (db_url  == cfg.end() || db_url->second.empty())) {
+        report.missing_keys.push_back("RAWIMPORT_DB_CONNECTION");
+        report.missing_keys.push_back("RAWIMPORT_DATABASE_URL");
+    }
+    report.valid = report.missing_keys.empty();
+    return report;
+}
+
 // SHA-256 hex encoding utility (used by HashService implementations).
 inline std::string sha256_hex(const SHA256Hash& h) {
     std::ostringstream oss;
     for (auto byte : h)
         oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
     return oss.str();
-}
-
-inline std::vector<RequiredConfigKey> required_config_keys() {
-    return {
-        {"OUTPUT_DIR",   "Destination directory for converted DNG files"},
-        {"INPUT_DIR",    "Watched directory containing RAW source files"},
-        {"CONVERTER_ENGINE", "Converter engine to use (dnglab | adobedng)"},
-    };
 }
 
 } // namespace rawimport::domain

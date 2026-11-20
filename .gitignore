@@ -6,6 +6,9 @@ rawimport-pipeline
 rawimport-pipeline.exe
 rawimport.exe
 build.log
+build/
+build-*/
+build_test/
 
 # Local test data
 testdata/

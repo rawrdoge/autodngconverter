@@ -30,14 +30,18 @@ struct TableDef {
 };
 
 const std::vector<TableDef> kTables = {
-    {"sequences", {"id", "seq", "created_at"}},
-    {"imports", {"sequence_id", "source_path", "output_path", "status",
-                 "error_message", "source_fingerprint_size", "source_fingerprint_mtime_epoch",
-                 "source_fingerprint_fnv1a", "created_at", "started_at", "completed_at"}},
-    {"reconversions", {"id", "import_id", "source_dng_path", "output_dng_path",
-                       "status", "error_message", "scheduled_at", "started_at", "completed_at"}},
-    {"preview_edits", {"id", "import_id", "preview_path", "settings_json", "created_at"}},
-    {"alerts", {"id", "import_id", "severity", "message", "code", "created_at"}},
+    {"sequences", {"id", "name", "created_at"}},
+    {"imports", {"id", "sequence_id", "source_path", "source_hash", "output_path", "output_hash",
+                 "camera_model", "capture_date", "capture_time", "date_source", "folder_schema",
+                 "conversion_settings", "status", "created_at", "started_at", "completed_at", "error_message",
+                 "last_preview_edit_at", "orientation",
+                 "source_fingerprint_size", "source_fingerprint_mtime", "source_fingerprint_fnv1a"}},
+    {"reconversions", {"id", "import_id", "previous_output_hash", "new_output_hash",
+                       "conversion_settings", "reason", "triggered_at", "scheduled_at", "started_at", "completed_at",
+                       "status", "error_message"}},
+    {"preview_edits", {"id", "import_id", "worker", "previous_output_hash", "new_output_hash",
+                       "preview_width", "preview_height", "preview_quality", "edited_at"}},
+    {"alerts", {"id", "severity", "category", "message", "ref_sequence", "created_at", "acknowledged"}},
     {"locks", {"id", "import_id", "holder", "acquired_at", "expires_at", "released_at"}}, // skipped
 };
 
@@ -83,33 +87,44 @@ MigrationResult MigrationRunner::run() {
     r = verify_not_empty_();
     if (r.status != MigrationStatus::Success) return r;
 
+    // In dry-run mode, all subsequent steps return SkippedDryRun.
+    // We treat this as success for the overall migration.
+    bool is_dry_run = opts_.dry_run;
+
     // 6. Stream sequences (CRITICAL: preserve exact seq values)
     r = stream_sequences_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 7. Stream imports
     r = stream_imports_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 8. Stream reconversions
     r = stream_reconversions_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 9. Stream preview_edits
     r = stream_preview_edits_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 10. Stream alerts
     r = stream_alerts_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 11. Reset target sequences: setval('sequences_id_seq', max_seq + 1)
     r = reset_target_sequences_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // 12. Verify counts match
     r = verify_counts_();
-    if (r.status != MigrationStatus::Success) return r;
+    if (!is_dry_run && r.status != MigrationStatus::Success) return r;
+    if (is_dry_run && r.status == MigrationStatus::SkippedDryRun) r.status = MigrationStatus::Success;
 
     // Success
     auto end = std::chrono::steady_clock::now();
@@ -192,6 +207,14 @@ MigrationResult MigrationRunner::create_target_schema_() {
 MigrationResult MigrationRunner::drain_locks_() {
     MigrationResult result;
 
+    // Dry-run mode must not touch the source — report only.
+    if (opts_.dry_run) {
+        result.warnings.push_back(
+            "Dry run: would check for active locks on source, wait up to 300s for drain, "
+            "then force-expire stale locks if any remain.");
+        return result;
+    }
+
     // Create source store
     std::unique_ptr<domain::ImportStore> source;
     if (opts_.from == SourceDB::MariaDB) {
@@ -200,39 +223,48 @@ MigrationResult MigrationRunner::drain_locks_() {
         source = std::make_unique<infrastructure::PostgresqlImportStore>(opts_.source_dsn);
     }
 
-    // First, check active locks count
-    int64_t active_locks = source->count_migration_rows("locks");
-    if (active_locks > 0) {
-        result.warnings.push_back(
-            "Found " + std::to_string(active_locks) + " active locks. Waiting for drain...");
+    // Count actual active locks: unreleased rows on the new schema, or any row
+    // on legacy processing_locks. Returns -1 on read error.
+    int64_t active = source->count_active_locks();
+    if (active < 0) {
+        set_failed_(result, MigrationStatus::FailedDrainLocks,
+                    "Failed to count active locks on source database (read error)");
+        return result;
+    }
+    if (active == 0) return result;
 
-        // Wait up to 5 minutes for locks to be released
-        const int max_wait_seconds = 300;
-        const int poll_interval = 5;
-        int waited = 0;
+    result.warnings.push_back(
+        "Found " + std::to_string(active) + " active lock(s). Waiting for drain...");
 
-        while (waited < max_wait_seconds) {
-            std::this_thread::sleep_for(std::chrono::seconds(poll_interval));
-            waited += poll_interval;
-
-            active_locks = source->count_migration_rows("locks");
-            if (active_locks == 0) break;
+    const int max_wait_seconds = 300;
+    const int poll_interval = 5;
+    for (int waited = 0; waited < max_wait_seconds; waited += poll_interval) {
+        std::this_thread::sleep_for(std::chrono::seconds(poll_interval));
+        active = source->count_active_locks();
+        if (active < 0) {
+            set_failed_(result, MigrationStatus::FailedDrainLocks,
+                        "Failed to count active locks during drain wait (read error)");
+            return result;
         }
-
-        if (active_locks > 0) {
-            // Force-expire stale locks
-            int expired = source->expire_stale_locks(0); // expire all
-            result.warnings.push_back(
-                "Force-expired " + std::to_string(expired) + " stale locks after " +
-                std::to_string(max_wait_seconds) + "s timeout");
-        }
+        if (active == 0) break;
     }
 
-    // Final verification
-    int64_t remaining = source->count_migration_rows("locks");
+    if (active > 0) {
+        int expired = source->expire_stale_locks(0);
+        result.warnings.push_back(
+            "Force-expired " + std::to_string(expired) + " stale lock(s) after " +
+            std::to_string(max_wait_seconds) + "s timeout.");
+    }
+
+    int64_t remaining = source->count_active_locks();
+    if (remaining < 0) {
+        set_failed_(result, MigrationStatus::FailedDrainLocks,
+                    "Failed to count active locks after drain (read error)");
+        return result;
+    }
     if (remaining > 0) {
         set_failed_(result, MigrationStatus::FailedDrainLocks,
-                    "Failed to drain " + std::to_string(remaining) + " locks after timeout");
+                    "Remaining active locks after timeout: " + std::to_string(remaining));
         return result;
     }
 
@@ -290,14 +322,26 @@ MigrationResult MigrationRunner::stream_sequences_() {
 
     const TableDef& t = kTables[0]; // sequences
     int64_t total = source->count_migration_rows(t.name);
+    if (total < 0) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to count rows in source table '" + t.name + "' (read error)");
+        return result;
+    }
     if (total == 0) {
         record_diff_(t.name, 0, 0, false, "");
         return result;
     }
 
-    // Read ALL rows from source (ordered by id to preserve seq)
     auto rows = source->list_migration_rows(t.name, t.columns);
-    int64_t max_seq = -1;
+    if (static_cast<int64_t>(rows.size()) != total) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to read rows from source table '" + t.name +
+                    "': got " + std::to_string(rows.size()) + " rows but expected " +
+                    std::to_string(total));
+        return result;
+    }
+
+    int64_t max_id = -1;
 
     // Batch insert
     std::vector<std::vector<std::string>> batch;
@@ -308,11 +352,9 @@ MigrationResult MigrationRunner::stream_sequences_() {
         }
         batch.push_back(std::move(vals));
 
-        // Track max seq (the 'seq' column)
-        if (t.columns[1] == "seq") {
-            int64_t seq_val = std::atoll(rows[i].at("seq").c_str());
-            if (seq_val > max_seq) max_seq = seq_val;
-        }
+        // Track max id (the 'id' column — sequence names are arbitrary).
+        int64_t id_val = std::atoll(rows[i].at("id").c_str());
+        if (id_val > max_id) max_id = id_val;
 
         if (batch.size() >= static_cast<size_t>(opts_.batch_size) || i == rows.size() - 1) {
             if (!target->bulk_insert_migration(t.name, t.columns, batch)) {
@@ -328,7 +370,7 @@ MigrationResult MigrationRunner::stream_sequences_() {
     std::cout << std::endl;
 
     record_diff_(t.name, total, result.stats.sequences_inserted, false,
-                 max_seq >= 0 ? "max seq=" + std::to_string(max_seq) : "");
+                 max_id >= 0 ? "max id=" + std::to_string(max_id) : "");
     return result;
 }
 
@@ -357,13 +399,24 @@ MigrationResult MigrationRunner::stream_imports_() {
 
     const TableDef& t = kTables[1]; // imports
     int64_t total = source->count_migration_rows(t.name);
+    if (total < 0) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to count rows in source table '" + t.name + "' (read error)");
+        return result;
+    }
     if (total == 0) {
         record_diff_(t.name, 0, 0, false, "");
         return result;
     }
 
-    // Read all rows from source
     auto rows = source->list_migration_rows(t.name, t.columns);
+    if (static_cast<int64_t>(rows.size()) != total) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to read rows from source table '" + t.name +
+                    "': got " + std::to_string(rows.size()) + " rows but expected " +
+                    std::to_string(total));
+        return result;
+    }
 
     std::vector<std::vector<std::string>> batch;
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -415,12 +468,24 @@ MigrationResult MigrationRunner::stream_reconversions_() {
 
     const TableDef& t = kTables[2]; // reconversions
     int64_t total = source->count_migration_rows(t.name);
+    if (total < 0) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to count rows in source table '" + t.name + "' (read error)");
+        return result;
+    }
     if (total == 0) {
         record_diff_(t.name, 0, 0, false, "");
         return result;
     }
 
     auto rows = source->list_migration_rows(t.name, t.columns);
+    if (static_cast<int64_t>(rows.size()) != total) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to read rows from source table '" + t.name +
+                    "': got " + std::to_string(rows.size()) + " rows but expected " +
+                    std::to_string(total));
+        return result;
+    }
 
     std::vector<std::vector<std::string>> batch;
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -472,12 +537,24 @@ MigrationResult MigrationRunner::stream_preview_edits_() {
 
     const TableDef& t = kTables[3]; // preview_edits
     int64_t total = source->count_migration_rows(t.name);
+    if (total < 0) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to count rows in source table '" + t.name + "' (read error)");
+        return result;
+    }
     if (total == 0) {
         record_diff_(t.name, 0, 0, false, "");
         return result;
     }
 
     auto rows = source->list_migration_rows(t.name, t.columns);
+    if (static_cast<int64_t>(rows.size()) != total) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to read rows from source table '" + t.name +
+                    "': got " + std::to_string(rows.size()) + " rows but expected " +
+                    std::to_string(total));
+        return result;
+    }
 
     std::vector<std::vector<std::string>> batch;
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -529,12 +606,24 @@ MigrationResult MigrationRunner::stream_alerts_() {
 
     const TableDef& t = kTables[4]; // alerts
     int64_t total = source->count_migration_rows(t.name);
+    if (total < 0) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to count rows in source table '" + t.name + "' (read error)");
+        return result;
+    }
     if (total == 0) {
         record_diff_(t.name, 0, 0, false, "");
         return result;
     }
 
     auto rows = source->list_migration_rows(t.name, t.columns);
+    if (static_cast<int64_t>(rows.size()) != total) {
+        set_failed_(result, MigrationStatus::FailedReadSource,
+                    "Failed to read rows from source table '" + t.name +
+                    "': got " + std::to_string(rows.size()) + " rows but expected " +
+                    std::to_string(total));
+        return result;
+    }
 
     std::vector<std::vector<std::string>> batch;
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -616,6 +705,11 @@ MigrationResult MigrationRunner::verify_counts_() {
         int64_t src_count = source->count_migration_rows(t.name);
         int64_t tgt_count = target->count_migration_rows(t.name);
 
+        if (src_count < 0 || tgt_count < 0) {
+            set_failed_(result, MigrationStatus::FailedCountVerify,
+                        "Failed to count rows in verification of table '" + t.name + "' (read error)");
+            return result;
+        }
         if (src_count != tgt_count) {
             set_failed_(result, MigrationStatus::FailedCountVerify,
                         "Count mismatch on table '" + t.name + "': source=" +
@@ -625,20 +719,20 @@ MigrationResult MigrationRunner::verify_counts_() {
         }
     }
 
-    // Verify sequence continuity: no gaps in seq [1..max_seq]
-    int64_t max_seq = target->get_max_pk("sequences"); // this gets max(id), not max(seq)
-    // For seq continuity, we need to check the seq column specifically
-    auto seq_rows = target->list_migration_rows("sequences", {"seq"});
-    int64_t expected = 1;
-    for (const auto& row : seq_rows) {
-        int64_t seq = std::atoll(row.at("seq").c_str());
-        if (seq != expected) {
-            set_failed_(result, MigrationStatus::FailedSequencePreserve,
-                        "Sequence gap detected: expected " + std::to_string(expected) +
-                        ", found " + std::to_string(seq));
-            return result;
-        }
-        ++expected;
+    // Verify sequence IDs match between source and target (preserve gaps).
+    auto src_seq = source->list_migration_rows("sequences", {"id"});
+    std::vector<int64_t> src_ids, tgt_ids;
+    for (const auto& row : src_seq)
+        src_ids.push_back(std::atoll(row.at("id").c_str()));
+    std::sort(src_ids.begin(), src_ids.end());
+    auto seq_rows = target->list_migration_rows("sequences", {"id"});
+    for (const auto& row : seq_rows)
+        tgt_ids.push_back(std::atoll(row.at("id").c_str()));
+    std::sort(tgt_ids.begin(), tgt_ids.end());
+    if (src_ids != tgt_ids) {
+        set_failed_(result, MigrationStatus::FailedSequencePreserve,
+                    "Sequence ID mismatch between source and target");
+        return result;
     }
 
     return result;

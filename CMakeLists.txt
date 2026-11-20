@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(rawimport_pipeline VERSION 2.3.0 LANGUAGES CXX)
+project(rawimport_pipeline VERSION 2.3.27 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,36 +59,38 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
     find_library(MARIADB_LIB NAMES mariadb libmariadb mariadbclient
                  PATH_SUFFIXES mariadb mysql)
     find_path(MARIADB_INCLUDE NAMES mysql.h PATH_SUFFIXES mariadb mysql)
-    if(MARIADB_LIB AND MARIADB_INCLUDE)
-      add_compile_definitions(WITH_MARIADB)
-      list(APPEND INFRA_SOURCES src/infrastructure/mariadb_import_store.cpp)
-      list(APPEND INFRA_DEPS ${MARIADB_LIB})
-      target_include_directories(domain_types INTERFACE ${MARIADB_INCLUDE})
-    else()
-      message(WARNING "WITH_MARIADB requested but MariaDB SDK not found")
+    if(NOT MARIADB_LIB OR NOT MARIADB_INCLUDE)
+      message(FATAL_ERROR "WITH_MARIADB=ON but MariaDB client library/headers not found. Install libmariadb-dev (Debian/Ubuntu) or mariadb-connector-c-devel (RHEL/Fedora), then retry.")
     endif()
+    add_compile_definitions(WITH_MARIADB)
+    list(APPEND INFRA_SOURCES src/infrastructure/mariadb_import_store.cpp)
+    list(APPEND INFRA_DEPS ${MARIADB_LIB})
+    target_include_directories(domain_types INTERFACE ${MARIADB_INCLUDE})
   endif()
 
   if(WITH_POSTGRESQL)
-    find_package(PostgreSQL QUIET)
-    if(PostgreSQL_FOUND)
-      add_compile_definitions(WITH_POSTGRESQL)
-      list(APPEND INFRA_SOURCES src/infrastructure/postgresql_import_store.cpp)
-      list(APPEND INFRA_DEPS PostgreSQL::Libpq)
-    else()
-      message(WARNING "WITH_POSTGRESQL requested but PostgreSQL not found")
-    endif()
+    find_package(PostgreSQL REQUIRED)
+    add_compile_definitions(WITH_POSTGRESQL)
+    list(APPEND INFRA_SOURCES src/infrastructure/postgresql_import_store.cpp)
+    list(APPEND INFRA_DEPS PostgreSQL::PostgreSQL)
   endif()
 
   if(WITH_DNGLAB)
-    add_compile_definitions(WITH_DNGLAB)
-    list(APPEND INFRA_SOURCES src/infrastructure/dnglab_converter_engine.cpp)
+    find_library(DNGLAB_LIBRARY NAMES dnglab)
+    find_path(DNGLAB_INCLUDE_DIR NAMES dnglab/converter.hpp)
+    if(DNGLAB_LIBRARY AND DNGLAB_INCLUDE_DIR)
+      add_compile_definitions(WITH_DNGLAB)
+      list(APPEND INFRA_SOURCES src/infrastructure/dnglab_converter_engine.cpp)
+      list(APPEND INFRA_DEPS ${DNGLAB_LIBRARY})
+      target_include_directories(domain_types INTERFACE ${DNGLAB_INCLUDE_DIR})
+    else()
+      message(WARNING "WITH_DNGLAB requested but dnglab library not found")
+    endif()
   endif()
 
-  # Adobe DNG: binary spawn only, no library needed
-  list(APPEND INFRA_SOURCES src/infrastructure/adobe_dng_converter_engine.cpp)
   if(WITH_ADOBE_DNG)
     add_compile_definitions(WITH_ADOBE_DNG)
+    list(APPEND INFRA_SOURCES src/infrastructure/adobe_dng_converter_engine.cpp)
   endif()
 
   if(WITH_EXIFTOOL)
@@ -107,21 +109,22 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   endif()
 
   if(WITH_SPDLOG)
+    find_package(spdlog REQUIRED)
     add_compile_definitions(WITH_SPDLOG)
     list(APPEND INFRA_SOURCES src/infrastructure/spdlog_log_sink.cpp)
-    find_package(spdlog QUIET)
     if(TARGET spdlog::spdlog)
       list(APPEND INFRA_DEPS spdlog::spdlog)
     endif()
   endif()
 
-  # Migration infrastructure
-  list(APPEND INFRA_SOURCES
-    src/infrastructure/migration_options.hpp
-    src/infrastructure/migration_runner.cpp
-    src/infrastructure/migration_runner.hpp
-  )
-  if(WITH_MARIADB AND WITH_POSTGRESQL)
+  # Migration infrastructure (requires both DB libraries)
+  if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
+    list(APPEND INFRA_SOURCES
+      src/infrastructure/migration_options.hpp
+      src/infrastructure/migration_runner.cpp
+      src/infrastructure/migration_runner.hpp
+    )
+    set(HAVE_MIGRATION 1 CACHE INTERNAL "Migration enabled")
     add_compile_definitions(HAVE_MIGRATION)
   endif()
 
@@ -136,7 +139,10 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
     target_include_directories(infrastructure PUBLIC include)
     target_include_directories(infrastructure PRIVATE src)
     if(INFRA_DEPS)
-      target_link_libraries(infrastructure PRIVATE ${INFRA_DEPS} m)
+      target_link_libraries(infrastructure PRIVATE ${INFRA_DEPS})
+      if(UNIX AND NOT APPLE)
+        target_link_libraries(infrastructure PRIVATE m)
+      endif()
     endif()
   endif()
 
@@ -155,6 +161,9 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   add_executable(rawimport-cli
     src/cli/main.cpp
   )
+  if(HAVE_MIGRATION)
+    target_sources(rawimport-cli PRIVATE src/cli/migrate_command.cpp)
+  endif()
   set_target_properties(rawimport-cli PROPERTIES CXX_STANDARD 20)
   target_include_directories(rawimport-cli PRIVATE include src)
   target_link_libraries(rawimport-cli PRIVATE infrastructure domain)
@@ -182,6 +191,7 @@ if(BUILD_TESTING)
   add_executable(infra_test tests/infrastructure/infra_test.cpp)
   set_target_properties(infra_test PROPERTIES CXX_STANDARD 20)
   target_include_directories(infra_test PRIVATE include src tests)
+  target_link_libraries(infra_test PRIVATE infrastructure)
   add_test(NAME infra_tests COMMAND infra_test)
 
   # Converter factory tests.
@@ -193,12 +203,31 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME converter_factory_tests COMMAND converter_factory_test)
 
-  # Migration tests (need both DB drivers).
-  add_executable(migration_test tests/migration/migration_test.cpp)
-  set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-  target_include_directories(migration_test PRIVATE include src tests)
-  if(WITH_MARIADB AND WITH_POSTGRESQL)
-    target_link_libraries(migration_test PRIVATE infrastructure)
+  # Migration tests (need both DB drivers with libraries found).
+    if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
+      add_executable(migration_test tests/migration/migration_test.cpp)
+      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
+      target_include_directories(migration_test PRIVATE include src tests)
+      target_link_libraries(migration_test PRIVATE infrastructure)
+      add_test(NAME migration_tests COMMAND migration_test)
+    endif()
+
+    # Always define migration_test when BUILD_TESTING=ON so it is discoverable
+    # in CI even when DB drivers are unavailable.
+    # Conditional linking above ensures it only links DB deps when both drivers are present.
+    if(BUILD_TESTING AND NOT (MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND))
+      add_executable(migration_test tests/migration/migration_test.cpp)
+      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
+      target_include_directories(migration_test PRIVATE include src tests)
+      add_test(NAME migration_tests COMMAND migration_test)
+    endif()
+
+    # ============================================================================
+    # build-test target - builds all test targets
+    # ============================================================================
+    add_custom_target(build-test
+      DEPENDS domain_types_test port_interface_test infra_test converter_factory_test migration_test
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+      COMMENT "Build all test targets"
+    )
   endif()
-  add_test(NAME migration_tests COMMAND migration_test)
-endif()

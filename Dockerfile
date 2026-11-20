@@ -36,7 +36,7 @@ COPY --from=dnglab-build /vibelabdng/target/release/dnglab /usr/local/bin/dnglab
 
 RUN mkdir -p build && cd build \
     && cmake -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_BUILD_TYPE=Release \
-        -DWITH_DNGLAB=ON -DBUILD_TESTING=ON .. \
+        -DWITH_DNGLAB=ON -DWITH_MARIADB=ON -DWITH_POSTGRESQL=ON -DBUILD_TESTING=ON .. \
     && cmake --build . -j"$(nproc)"
 
 # ============================================================
@@ -61,11 +61,11 @@ RUN mkdir -p /appdata/engines \
 # Volumes
 VOLUME ["/watch", "/output", "/archive", "/db", "/appdata"]
 
-ENV WATCH_DIR=/watch
-ENV OUTPUT_DIR=/output
-ENV ARCHIVE_DIR=/archive
-ENV DB_DIR=/db
-ENV APPDATA_DIR=/appdata
+ENV RAWIMPORT_INPUT_DIR=/watch
+ENV RAWIMPORT_OUTPUT_DIR=/output
+ENV RAWIMPORT_ARCHIVE_DIR=/archive
+ENV RAWIMPORT_DB_DIR=/db
+ENV RAWIMPORT_APPDATA_DIR=/appdata
 
 # Health check on the REST endpoint (PRD §8 GET /health)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -74,3 +74,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 USER appuser
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/rawimport-cli"]
+CMD ["watch"]

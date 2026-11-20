@@ -19,6 +19,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct utest_entry utest_entry_t; // Forward declaration for MSVC static registration
+
+// Forward declare utest_register for MSVC static registration constructor
+static inline void utest_register(utest_entry_t *e);
+
+#if defined(_WIN32) && defined(__cplusplus)
+// Portable C++ static-registration fallback for MSVC and other compilers.
+struct utest_registrar_t {
+    explicit utest_registrar_t(utest_entry_t *e) { utest_register(e); }
+};
+#define UTEST_AUTO_REG(name) static utest_registrar_t utest_auto_reg_##name{&utest_reg_##name};
+#elif defined(__GNUC__) || defined(__clang__)
+#define UTEST_AUTO_REG(name)                                                       \
+    __attribute__((constructor)) static void utest_auto_reg_##name(void) {       \
+        utest_register(&utest_reg_##name);                                       \
+    }
+#else
+#error utest.h: automatic test registration requires GCC/Clang or MSVC (C++ mode).
+#endif
+
 #define UTEST_STR_(x) #x
 #define UTEST_STR(x)  UTEST_STR_(x)
 
@@ -57,12 +77,14 @@
 /* ------------------------------------------------------------------ */
 /* Test registration                                                   */
 /* ------------------------------------------------------------------ */
+
 #define TEST(name)                                                               \
-	static void utest_fn_##name(void);                                        \
-	static utest_entry_t utest_reg_##name = {                              \
-		#name, utest_fn_##name, __FILE__, __LINE__                          \
-	};                                                                       \
-	static void utest_fn_##name(void)
+    static void utest_fn_##name(void);                                        \
+    static utest_entry_t utest_reg_##name = {                              \
+        #name, utest_fn_##name, __FILE__, __LINE__                          \
+    };                                                                       \
+    UTEST_AUTO_REG(name)                                                     \
+    static void utest_fn_##name(void)
 
 #define UTEST_ENTRY extern utest_entry_t utest_reg_##name
 

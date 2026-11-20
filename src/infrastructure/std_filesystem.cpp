@@ -7,6 +7,8 @@
 #include <fstream>
 #include <system_error>
 #include <vector>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 namespace rawimport::infrastructure {
 
@@ -28,15 +30,16 @@ std::optional<domain::FilePath> StdFileSystem::move_file(const domain::FilePath&
     const auto sp = to_fs(src);
     const auto dp = to_fs(dst);
 
+    // Hash source BEFORE any rename (for cross-device verification).
+    auto h_src = sha256_file(src);
+
     // Try direct rename first (same filesystem).
     std::error_code ec;
     std::filesystem::rename(sp, dp, ec);
     if (!ec) {
-        // Verify hash on both sides (best-effort).
-        auto h_src = sha256_file(src);
+        // Verify hash on destination side.
         auto h_dst = sha256_file(dst);
         if (h_src && h_dst && *h_src == *h_dst) {
-            delete_file(src);
             return dst;
         }
         // Hash mismatch — move file back (best-effort).
@@ -46,7 +49,6 @@ std::optional<domain::FilePath> StdFileSystem::move_file(const domain::FilePath&
 
     // Cross-device fallback: copy + verify + remove source.
     if (std::filesystem::copy_file(sp, dp, ec)) {
-        auto h_src = sha256_file(src);
         auto h_dst = sha256_file(dst);
         if (h_src && h_dst && *h_src == *h_dst) {
             delete_file(src);
@@ -77,17 +79,25 @@ bool StdFileSystem::delete_file(const domain::FilePath& path) {
     return existed;
 }
 
-std::optional<domain::SHA256Hash> StdFileSystem::sha256_file(const domain::FilePath& path) {
+std::optional<domain::SHA256Hash> StdFileSystem::sha256_file(const domain::FilePath& path, int* errno_out) {
     std::ifstream f(to_fs(path), std::ios::binary);
-    if (!f) return std::nullopt;
+    if (!f) {
+        if (errno_out) *errno_out = errno;
+        return std::nullopt;
+    }
+
+    auto hasher = hash_svc_.create_sha256_hasher();
     std::vector<uint8_t> buf(65536);
-    std::vector<uint8_t> all;
-    while (f.read(reinterpret_cast<char*>(buf.data()), buf.size()))
-        all.insert(all.end(), buf.data(), buf.data() + f.gcount());
+    while (f.read(reinterpret_cast<char*>(buf.data()), buf.size())) {
+        auto chunk_span = std::span<const uint8_t>(buf.data(), f.gcount());
+        hasher->update(chunk_span);
+    }
     // Append any remaining bytes
-    if (f.gcount() > 0)
-        all.insert(all.end(), buf.data(), buf.data() + f.gcount());
-    return hash_svc_.sha256_bytes(std::span<const uint8_t>(all.data(), all.size()));
+    if (f.gcount() > 0) {
+        auto chunk_span = std::span<const uint8_t>(buf.data(), f.gcount());
+        hasher->update(chunk_span);
+    }
+    return hasher->finalize();
 }
 
 domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::FilePath& path) {
@@ -96,10 +106,32 @@ domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::Fi
     if (!std::filesystem::exists(p)) return fp;
 
     fp.size_bytes = static_cast<uint64_t>(std::filesystem::file_size(p));
-    const auto wt = std::filesystem::last_write_time(p);
-    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
-                          wt.time_since_epoch()).count();
-    fp.mtime = std::chrono::system_clock::from_time_t(secs);
+    // Use stat() for portable Unix epoch mtime. std::filesystem::file_time_type
+    // epoch is implementation-defined; on some GCC/platforms it differs from
+    // system_clock, causing wrong timestamps in fingerprints.
+#if defined(_WIN32)
+    struct _stat st{};
+    if (_wstat(p.c_str(), &st) == 0) {
+#else
+    struct stat st{};
+    if (stat(p.c_str(), &st) == 0) {
+#endif
+        fp.mtime = std::chrono::system_clock::from_time_t(st.st_mtime);
+    } else {
+        // Fallback: best-effort using filesystem clock (may be wrong on some platforms)
+        const auto wt = std::filesystem::last_write_time(p);
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+        try {
+            fp.mtime = std::chrono::clock_cast<std::chrono::system_clock>(wt);
+        } catch (...) {
+            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(wt.time_since_epoch()).count();
+            fp.mtime = std::chrono::system_clock::from_time_t(secs);
+        }
+#else
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(wt.time_since_epoch()).count();
+        fp.mtime = std::chrono::system_clock::from_time_t(secs);
+#endif
+    }
 
     // FNV-1a of first 4 KiB.
     constexpr std::size_t CHUNK = 4096;

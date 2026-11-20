@@ -11,6 +11,25 @@
 #include <sstream>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+
+// On Windows, MultiByteToWideChar with -1 length includes a trailing null.
+// We must strip it from every converted string before appending to the command line.
+static inline std::wstring utf8_to_wide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (wlen <= 1) return std::wstring();
+    std::wstring w(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], wlen);
+    w.resize(wlen - 1);  // strip trailing null from -1 length
+    return w;
+}
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
+
 namespace rawimport::infrastructure {
 
 namespace {
@@ -20,21 +39,89 @@ std::string find_in_path(const std::string& name) {
     if (!path_env) return {};
     std::istringstream ss(path_env);
     std::string dir;
-    while (std::getline(ss, dir, ':')) {
+#ifdef _WIN32
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    while (std::getline(ss, dir, sep)) {
         auto p = std::filesystem::path(dir) / name;
         if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) return p.string();
     }
     return {};
 }
 
-// Cross-platform process spawn returning exit code.
-int run_cmd(const std::vector<std::string>& args) {
-    std::ostringstream cmd;
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        if (i) cmd << " ";
-        cmd << args[i];
+#if defined(_WIN32)
+// Escape a single argument for embedding in a CreateProcess command line.
+static std::string quote_cmdline_arg_win(const char* arg) {
+    bool needs_quote = false;
+    for (const char* p = arg; *p; ++p) {
+        if (*p == ' ' || *p == '\t' || *p == '"' || *p == '\\') { needs_quote = true; break; }
     }
-    return std::system(cmd.str().c_str());
+    if (!needs_quote) return std::string(arg);
+    std::string out;
+    out.reserve(std::strlen(arg) + 4);
+    out += '"';
+    for (const char* p = arg; *p; ++p) {
+        if (*p == '\\') out += '\\';
+        out += *p;
+    }
+    out += '"';
+    return out;
+}
+#endif
+
+int exec_cmd(const std::vector<std::string>& args) {
+    if (args.empty()) return -1;
+
+#ifdef _WIN32
+    // Build quoted UTF-16 command line for CreateProcessW.
+    // Source args are UTF-8 strings; widen via CP_UTF8 so multibyte paths
+    // (Cyrillic, CJK, etc.) survive intact. utf8_to_wide strips the trailing
+    // null that MultiByteToWideChar appends when length=-1.
+    std::wstring wcmd = utf8_to_wide(args.data()[0]);
+    if (wcmd.empty()) return -1;
+    for (size_t i = 1; i < args.size(); ++i) {
+        wcmd += L' ';
+        std::string quoted = quote_cmdline_arg_win(args[i].c_str());
+        std::wstring part = utf8_to_wide(quoted);
+        if (part.empty()) return -1;
+        wcmd += part;
+    }
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    BOOL ok = CreateProcessW(nullptr, const_cast<wchar_t*>(wcmd.c_str()),
+                             nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    if (!ok) return -1;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD rc;
+    GetExitCodeProcess(pi.hProcess, &rc);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    return static_cast<int>(rc);
+#else
+    // POSIX: build argv array and spawn via execvp — no shell involvement.
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == -1) return -1;
+
+    if (pid == 0) {
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return -1;
+#endif
 }
 
 } // anon
@@ -56,13 +143,13 @@ domain::HealthReport AdobeDngConverterEngine::health_check() {
     if (bin.empty())
         return {domain::HealthStatus::Unhealthy, "Adobe DNG Converter binary not found", domain::now()};
     // Quick version check.
-    const int rc = run_cmd({bin, "--help"});
+    const int rc = exec_cmd({bin, "--help"});
     (void)rc;
     return {domain::HealthStatus::Healthy, "Adobe DNG Converter available", domain::now()};
 }
 
 std::vector<std::string> AdobeDngConverterEngine::supported_extensions() {
-    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF"};
+    return {".NEF", ".CR2", ".CR3", ".ARW", ".RAF", ".RW2", ".ORF", ".NRW"};
 }
 
 bool AdobeDngConverterEngine::supports_linear_dng() { return false; }
@@ -79,10 +166,10 @@ std::optional<domain::FilePath> AdobeDngConverterEngine::convert(const domain::F
     args.push_back(bin);
     args.push_back(source.native);
     args.push_back("-o");
-    args.push_back(dest.native.substr(0, dest.native.find_last_of("/\\")) );
+    args.push_back(dest.native.substr(0, dest.native.find_last_of("/\\")));
     if (settings.lossy) args.push_back("-lossy");
     // Adobe DNG Converter runs serially — one invocation per file.
-    const int rc = run_cmd(args);
+    const int rc = exec_cmd(args);
     if (rc != 0) return std::nullopt;
     return dest;
 }

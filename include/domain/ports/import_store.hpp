@@ -19,6 +19,7 @@ public:
     // ── CRUD on imports ───────────────────────────────────────────────────────
     virtual std::optional<int64_t> create_import(const ImportRecord& rec) = 0;
     virtual std::optional<ImportRecord> get_import(int64_t id) = 0;
+    virtual std::optional<ImportRecord> find_import_by_source_hash(const SHA256Hash& hash) = 0;
     virtual bool update_import(ImportRecord rec) = 0;
     virtual std::vector<ImportRecord> list_imports(std::optional<ImportStatus> status_filter = std::nullopt) = 0;
 
@@ -58,7 +59,7 @@ public:
     virtual std::vector<std::map<std::string, std::string>>
         list_migration_rows(const std::string& table,
                             const std::vector<std::string>& columns) = 0;
-    // Row count for an arbitrary table.
+    // Row count for an arbitrary table. Returns -1 on read error.
     virtual int64_t count_migration_rows(const std::string& table) = 0;
     // Bulk insert rows (values are SQL-safe string representations).
     virtual bool bulk_insert_migration(const std::string& table,
@@ -72,9 +73,18 @@ public:
     virtual bool table_exists(const std::string& table) = 0;
     // Force-expire stale locks older than max_age_seconds ago.
     virtual int expire_stale_locks(int64_t max_age_seconds) = 0;
+    // Count currently held (active) locks on the source database.
+    // Active = unreleased (new schema) or any row (legacy processing_locks).
+    // Returns -1 on read error, 0 when no lock table exists.
+    virtual int64_t count_active_locks() = 0;
 
     // ── Health ────────────────────────────────────────────────────────────────
     virtual HealthReport health_check() = 0;
+
+    // ── Schema initialization ──────────────────────────────────────────────────
+    // Create or upgrade database schema to the current version.
+    // Returns true on success, false on failure.
+    virtual bool init_schema() = 0;
 };
 
 } // namespace rawimport::domain

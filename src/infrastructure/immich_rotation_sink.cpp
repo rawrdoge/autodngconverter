@@ -1,17 +1,14 @@
 /*
  * rawimport-pipeline - Immich RotationSink adapter implementation
  */
-#include "infrastructure/immich_rotation_sink.hpp"
-
-#include <cstdio>
-#include <cstring>
-#include <sstream>
-#include <fstream>
-#include <iomanip>
-
 #ifdef WITH_IMMICH
 
+#include "infrastructure/immich_rotation_sink.hpp"
+
 #include <curl/curl.h>
+
+#include <sstream>
+#include <string>
 
 namespace rawimport::infrastructure {
 
@@ -62,15 +59,15 @@ CurlResponse http_request(const std::string& method, const std::string& url,
 
 ImmichRotationSink::ImmichRotationSink(std::string base_url, std::string api_key)
     : base_url_(std::move(base_url)), api_key_(std::move(api_key)) {
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (!base_url_.empty() && base_url_.back() == '/') {
+        base_url_.pop_back();
+    }
 }
 
-ImmichRotationSink::~ImmichRotationSink() {
-    curl_global_cleanup();
-}
+ImmichRotationSink::~ImmichRotationSink() = default;
 
 std::string ImmichRotationSink::build_url(const std::string& path) const {
-    return base_url_ + (base_url_.back() == '/' ? "" : "/") + path;
+    return base_url_ + (path.empty() || path[0] == '/' ? "" : "/") + path;
 }
 
 std::string ImmichRotationSink::http_put(const std::string& url, const std::string& body) const {
@@ -83,10 +80,10 @@ std::string ImmichRotationSink::http_get(const std::string& url) const {
 
 domain::HealthReport ImmichRotationSink::health_check() {
     try {
-        auto resp = http_get(build_url("api/server/ping"));
-        if (resp == "pong")
-            return {domain::HealthStatus::Healthy, "Immich ping OK", domain::now()};
-        return {domain::HealthStatus::Unhealthy, "Immich ping failed: " + resp, domain::now()};
+        auto resp = http_get(build_url("api/server/info"));
+        if (!resp.empty())
+            return {domain::HealthStatus::Healthy, "Immich API reachable", domain::now()};
+        return {domain::HealthStatus::Unhealthy, "Immich API returned empty response", domain::now()};
     } catch (...) {
         return {domain::HealthStatus::Unhealthy, "Immich unreachable", domain::now()};
     }

@@ -13,8 +13,8 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque libpq connection.
-struct PGconn;
+// Opaque libpq connection (void* for cross-target compatibility; cast to PGconn* in .cpp).
+using PgConnHandle = void*;
 
 namespace rawimport::infrastructure {
 
@@ -27,6 +27,7 @@ public:
     // ── imports ───────────────────────────────────────────────────────────────
     std::optional<int64_t>   create_import(const domain::ImportRecord& rec) override;
     std::optional<domain::ImportRecord> get_import(int64_t id) override;
+    std::optional<domain::ImportRecord> find_import_by_source_hash(const domain::SHA256Hash& hash) override;
     bool                     update_import(domain::ImportRecord rec) override;
     std::vector<domain::ImportRecord> list_imports(std::optional<domain::ImportStatus> status_filter) override;
 
@@ -73,16 +74,19 @@ public:
     bool execute_migration_sql(const std::string& sql) override;
     bool table_exists(const std::string& table) override;
     int expire_stale_locks(int64_t max_age_seconds) override;
+    int64_t count_active_locks() override;
 
     // ── health ────────────────────────────────────────────────────────────────
-    HealthReport health_check() override;
+    domain::HealthReport health_check() override;
+
+    // ── schema initialization ──────────────────────────────────────────────────
+    bool init_schema() override;
 
 private:
     std::string conninfo_;
-    PGconn* connect_() const;
-    void    drop_(PGconn* conn) const;
-    std::string pg_error_(PGconn* conn) const;
-    static std::string sql_escape(const std::string& s) const;
+    PgConnHandle connect_() const;
+       void        drop_(PgConnHandle conn) const;
+       std::string pg_error_(PgConnHandle conn) const;
 };
 
 } // namespace rawimport::infrastructure
