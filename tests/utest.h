@@ -26,7 +26,7 @@ typedef struct utest_entry utest_entry_t; // Forward declaration for MSVC static
 struct utest_registrar_t {
     explicit utest_registrar_t(utest_entry_t *e) { utest_register(e); }
 };
-#define UTEST_AUTO_REG(name) static utest_registrar_t utest_auto_reg_##name{&utest_reg_##name}
+#define UTEST_AUTO_REG(name) static utest_registrar_t utest_auto_reg_##name{&utest_reg_##name};
 #elif defined(__GNUC__) || defined(__clang__)
 #define UTEST_AUTO_REG(name)                                                       \
     __attribute__((constructor)) static void utest_auto_reg_##name(void) {       \

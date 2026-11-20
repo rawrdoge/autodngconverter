@@ -109,8 +109,13 @@ domain::FastFingerprint StdFileSystem::compute_fast_fingerprint(const domain::Fi
     // Use stat() for portable Unix epoch mtime. std::filesystem::file_time_type
     // epoch is implementation-defined; on some GCC/platforms it differs from
     // system_clock, causing wrong timestamps in fingerprints.
+#if defined(_WIN32)
+    struct _stat st{};
+    if (_wstat(p.c_str(), &st) == 0) {
+#else
     struct stat st{};
     if (stat(p.c_str(), &st) == 0) {
+#endif
         fp.mtime = std::chrono::system_clock::from_time_t(st.st_mtime);
     } else {
         // Fallback: best-effort using filesystem clock (may be wrong on some platforms)
