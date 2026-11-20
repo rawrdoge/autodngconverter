@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct utest_entry utest_entry_t; // Forward declaration for MSVC static registration
+
 #if defined(_WIN32) && defined(__cplusplus)
 // Portable C++ static-registration fallback for MSVC and other compilers.
 struct utest_registrar_t {
