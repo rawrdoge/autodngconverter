@@ -69,10 +69,13 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   endif()
 
   if(WITH_POSTGRESQL)
-    find_package(PostgreSQL REQUIRED)
+    find_package(PostgreSQL QUIET)
+    if(NOT PostgreSQL_FOUND)
+      message(FATAL_ERROR "WITH_POSTGRESQL=ON but PostgreSQL development library (libpq) not found. Install libpq-dev (Debian/Ubuntu) or postgresql-devel (RHEL/Fedora), then retry.")
+    endif()
     add_compile_definitions(WITH_POSTGRESQL)
     list(APPEND INFRA_SOURCES src/infrastructure/postgresql_import_store.cpp)
-    list(APPEND INFRA_DEPS PostgreSQL::PostgreSQL)
+    list(APPEND INFRA_DEPS PostgreSQL::Libpq)
   endif()
 
   if(WITH_DNGLAB)
@@ -124,7 +127,6 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
       src/infrastructure/migration_runner.cpp
       src/infrastructure/migration_runner.hpp
     )
-    set(HAVE_MIGRATION 1 CACHE INTERNAL "Migration enabled")
     add_compile_definitions(HAVE_MIGRATION)
   endif()
 
@@ -161,9 +163,6 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
   add_executable(rawimport-cli
     src/cli/main.cpp
   )
-  if(HAVE_MIGRATION)
-    target_sources(rawimport-cli PRIVATE src/cli/migrate_command.cpp)
-  endif()
   set_target_properties(rawimport-cli PROPERTIES CXX_STANDARD 20)
   target_include_directories(rawimport-cli PRIVATE include src)
   target_link_libraries(rawimport-cli PRIVATE infrastructure domain)
@@ -192,6 +191,9 @@ if(BUILD_TESTING)
   set_target_properties(infra_test PROPERTIES CXX_STANDARD 20)
   target_include_directories(infra_test PRIVATE include src tests)
   target_link_libraries(infra_test PRIVATE infrastructure)
+  if(HAVE_OPENSSL)
+    target_link_libraries(infra_test PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
+  endif()
   add_test(NAME infra_tests COMMAND infra_test)
 
   # Converter factory tests.
@@ -204,30 +206,11 @@ if(BUILD_TESTING)
   add_test(NAME converter_factory_tests COMMAND converter_factory_test)
 
   # Migration tests (need both DB drivers with libraries found).
-    if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
-      add_executable(migration_test tests/migration/migration_test.cpp)
-      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-      target_include_directories(migration_test PRIVATE include src tests)
-      target_link_libraries(migration_test PRIVATE infrastructure)
-      add_test(NAME migration_tests COMMAND migration_test)
-    endif()
-
-    # Always define migration_test when BUILD_TESTING=ON so it is discoverable
-    # in CI even when DB drivers are unavailable.
-    # Conditional linking above ensures it only links DB deps when both drivers are present.
-    if(BUILD_TESTING AND NOT (MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND))
-      add_executable(migration_test tests/migration/migration_test.cpp)
-      set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
-      target_include_directories(migration_test PRIVATE include src tests)
-      add_test(NAME migration_tests COMMAND migration_test)
-    endif()
-
-    # ============================================================================
-    # build-test target - builds all test targets
-    # ============================================================================
-    add_custom_target(build-test
-      DEPENDS domain_types_test port_interface_test infra_test converter_factory_test migration_test
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMENT "Build all test targets"
-    )
+  if(MARIADB_LIB AND MARIADB_INCLUDE AND PostgreSQL_FOUND)
+    add_executable(migration_test tests/migration/migration_test.cpp)
+    set_target_properties(migration_test PROPERTIES CXX_STANDARD 20)
+    target_include_directories(migration_test PRIVATE include src tests)
+    target_link_libraries(migration_test PRIVATE infrastructure)
+    add_test(NAME migration_tests COMMAND migration_test)
   endif()
+endif()

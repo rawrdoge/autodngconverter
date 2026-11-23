@@ -16,71 +16,31 @@ namespace rawimport::infrastructure {
 
 namespace {
 
-using MariadbHandle = MYSQL*;
-
-struct ParsedConn {
-    std::string host;
-    std::string user;
-    std::string password;
-    std::string database;
-    unsigned int port = 3306;
-};
-
-static ParsedConn parse_conn_str(const std::string& conn_str) {
-    ParsedConn p;
-    std::string s = conn_str;
-    // Remove mysql:// prefix if present
-    if (s.rfind("mysql://", 0) == 0) s = s.substr(8);
-
-    // Find user:pass@host:port/db
-    size_t at_pos = s.find('@');
-    if (at_pos != std::string::npos) {
-        std::string auth = s.substr(0, at_pos);
-        size_t colon = auth.find(':');
-        if (colon != std::string::npos) {
-            p.user = auth.substr(0, colon);
-            p.password = auth.substr(colon + 1);
-        } else {
-            p.user = auth;
-        }
-        s = s.substr(at_pos + 1);
-    }
-
-    // Now s is host:port/db or host/db
-    size_t slash = s.find('/');
-    if (slash != std::string::npos) {
-        p.database = s.substr(slash + 1);
-        s = s.substr(0, slash);
-    }
-
-    size_t colon = s.find(':');
-    if (colon != std::string::npos) {
-        p.host = s.substr(0, colon);
-        p.port = static_cast<unsigned int>(std::stoi(s.substr(colon + 1)));
-    } else {
-        p.host = s;
-    }
-    return p;
-}
-
 MariadbHandle db_connect(const std::string& conn_str) {
-    ParsedConn p = parse_conn_str(conn_str);
+    // Parse connection string: "host=X;user=Y;password=***;database=D"
+    std::string host, user, password, database;
+    std::stringstream ss(conn_str);
+    std::string pair;
+    while (std::getline(ss, pair, ';')) {
+        auto eq = pair.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = pair.substr(0, eq);
+        std::string val = pair.substr(eq + 1);
+        if (key == "host") host = val;
+        else if (key == "user") user = val;
+        else if (key == "password") password = val;
+        else if (key == "database") database = val;
+    }
 
     MariadbHandle conn = mysql_init(nullptr);
     if (!conn) return nullptr;
 
-    if (mysql_options(conn, MYSQL_OPT_CONNECT_ATTR_RESET, nullptr) != 0) {
-        mysql_close(conn);
-        return nullptr;
-    }
-
-    // Use parsed connection parameters
-    const char* host = p.host.empty() ? nullptr : p.host.c_str();
-    const char* user = p.user.empty() ? nullptr : p.user.c_str();
-    const char* pass = p.password.empty() ? nullptr : p.password.c_str();
-    const char* db = p.database.empty() ? nullptr : p.database.c_str();
-
-    if (mysql_real_connect(conn, host, user, pass, db, p.port, nullptr, 0) == NULL) {
+    if (!host.empty()) mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, "30");
+    if (mysql_real_connect(conn, host.empty() ? nullptr : host.c_str(),
+                           user.empty() ? nullptr : user.c_str(),
+                           password.empty() ? nullptr : password.c_str(),
+                           database.empty() ? nullptr : database.c_str(),
+                           0, nullptr, 0) == NULL) {
         mysql_close(conn);
         return nullptr;
     }
@@ -94,51 +54,18 @@ std::string sql_escape(MariadbHandle conn, const std::string& s) {
     return out;
 }
 
-// Helper to parse MySQL TIMESTAMP string to time_point
-static std::chrono::system_clock::time_point parse_mysql_timestamp(const char* str) {
-    if (!str || !*str) return std::chrono::system_clock::time_point{};
+std::string timestamp_to_iso(timeval tv) {
     struct tm tm{};
-#if defined(_WIN32) || defined(__CYGWIN__)
-    // Windows doesn't have strptime, use sscanf instead
-    int year, month, day, hour, min, sec;
-    if (sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
-        tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
-        tm.tm_mday = day;
-        tm.tm_hour = hour;
-        tm.tm_min = min;
-        tm.tm_sec = sec;
-        tm.tm_isdst = 0;
-        return std::chrono::system_clock::from_time_t(_mkgmtime(&tm));
-    }
-#else
-    // MySQL TIMESTAMP format: "YYYY-MM-DD HH:MM:SS"
-    if (strptime(str, "%Y-%m-%d %H:%M:%S", &tm)) {
-        return std::chrono::system_clock::from_time_t(timegm(&tm));
-    }
-#endif
-    return std::chrono::system_clock::time_point{};
-}
-
-static std::string timestamp_now() {
-    auto tp = std::chrono::system_clock::now();
-    auto tt = std::chrono::system_clock::to_time_t(tp);
-    struct tm tm{};
-    gmtime_r(&tt, &tm);
+    gmtime_r(&tv.tv_sec, &tm);
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
     return std::string(buf);
 }
 
 // Parse IMPORTS row into ImportRecord.
-// MariaDB imports table has 22 columns (0-21): id, sequence_id, source_path, source_hash,
-// output_path, output_hash, camera_model, capture_date, capture_time, date_source,
-// folder_schema, conversion_settings, status, created_at, started_at, completed_at,
-// error_message, last_preview_edit_at, orientation, source_fingerprint_size,
-// source_fingerprint_mtime, source_fingerprint_fnv1a
-domain::ImportRecord row_to_import(MYSQL_ROW row, unsigned int ncols) {
+domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
-    if (!row || ncols < 22) return r;
+    if (!row || ncols < 21) return r;
     r.sequence_id      = atoll(row[1]);  // sequence_id is column 2
     r.source_path.native = row[2] ? row[2] : "";
     // source_hash is column 4 (index 3)
@@ -157,18 +84,17 @@ domain::ImportRecord row_to_import(MYSQL_ROW row, unsigned int ncols) {
         }
     }
     r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
-    r.error_message    = row[16] ? row[16] : "";  // error_message is column 17
-    // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
-    if (row[19]) r.source_fingerprint.size_bytes = atoll(row[19]);
-    if (row[20]) {
-        auto secs = atoll(row[20]);
+    r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
+    // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
+    if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
+    if (row[19]) {
+        auto secs = atoll(row[19]);
         r.source_fingerprint.mtime = std::chrono::system_clock::from_time_t(secs);
     }
-    if (row[21]) r.source_fingerprint.fnv1a = atoll(row[21]);
-    // Timestamps: created_at (14), started_at (15), completed_at (16) - indices 13, 14, 15
-    r.created_at       = parse_mysql_timestamp(row[13]);
-    r.started_at       = parse_mysql_timestamp(row[14]);
-    r.completed_at     = parse_mysql_timestamp(row[15]);
+    if (row[20]) r.source_fingerprint.fnv1a = atoll(row[20]);
+    r.created_at       = domain::now();
+    r.started_at       = domain::now();
+    r.completed_at     = domain::now();
     return r;
 }
 
@@ -179,7 +105,7 @@ MariadbImportStore::MariadbImportStore(std::string connection_string)
 
 MariadbImportStore::~MariadbImportStore() = default;
 
-MYSQL* MariadbImportStore::connect_() const {
+auto MariadbImportStore::connect_() const -> MariadbHandle {
     return db_connect(connection_string_);
 }
 
@@ -188,11 +114,7 @@ void MariadbImportStore::drop_(MariadbHandle conn) const {
 }
 
 std::string MariadbImportStore::sql_escape(MariadbHandle conn, const std::string& s) const {
-    // Use mysql_real_escape_string for proper SQL escaping
-    std::string out(s.size() * 2 + 1, '\0');
-    size_t len = mysql_real_escape_string(conn, &out[0], s.c_str(), s.size());
-    out.resize(len);
-    return out;
+    return ::rawimport::infrastructure::sql_escape(conn, s);
 }
 
 // ── imports ───────────────────────────────────────────────────────────────────
@@ -216,9 +138,9 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
            << rec.source_fingerprint.fnv1a << ", "
-           << "'" + timestamp_now() + "', "
-           << "'" + timestamp_now() + "', "
-           << "'" + timestamp_now() + "'"
+           << "'" + timestamp_to_iso({0,0}) + "', "
+           << "'" + timestamp_to_iso({0,0}) + "', "
+           << "'" + timestamp_to_iso({0,0}) + "'"
            << ")";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
@@ -239,13 +161,12 @@ std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MYSQL_RES* res = mysql_store_result(conn);
-    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); drop_(conn); return std::nullopt; }
+    drop_(conn);
+    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
     MYSQL_ROW row = mysql_fetch_row(res);
-    unsigned int ncols = mysql_num_fields(res);
-    auto rec = row_to_import(row, ncols);
+    auto rec = row_to_import(row, mysql_num_fields(res));
     mysql_free_result(res);
-    drop_(conn);
     return rec;
 }
 
@@ -259,13 +180,12 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MYSQL_RES* res = mysql_store_result(conn);
-    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); drop_(conn); return std::nullopt; }
+    drop_(conn);
+    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
     MYSQL_ROW row = mysql_fetch_row(res);
-    unsigned int ncols = mysql_num_fields(res);
-    auto rec = row_to_import(row, ncols);
+    auto rec = row_to_import(row, mysql_num_fields(res));
     mysql_free_result(res);
-    drop_(conn);
     return rec;
 }
 
@@ -277,7 +197,7 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
     std::ostringstream sql;
     sql << "UPDATE imports SET status=" << static_cast<int>(rec.status)
         << ", error_message=" << sql_escape(conn, rec.error_message)
-        << ", completed_at='" << timestamp_now() << "'"
+        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
         << ", output_path=" << sql_escape(conn, rec.output_path.native)
         << ", output_hash=" << sql_escape(conn, output_hash_hex)
         << " WHERE sequence_id=" << rec.sequence_id;
@@ -300,15 +220,14 @@ std::vector<domain::ImportRecord> MariadbImportStore::list_imports(
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return {}; }
 
     MYSQL_RES* res = mysql_store_result(conn);
-    if (!res) { drop_(conn); return {}; }
+    drop_(conn);
+    if (!res) return {};
 
     std::vector<domain::ImportRecord> result;
     MYSQL_ROW row;
-    unsigned int ncols = mysql_num_fields(res);
     while ((row = mysql_fetch_row(res)))
-        result.push_back(row_to_import(row, ncols));
+        result.push_back(row_to_import(row, mysql_num_fields(res)));
     mysql_free_result(res);
-    drop_(conn);
     return result;
 }
 
@@ -324,9 +243,9 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
            << sql_escape(conn, rec.output_dng_path.native) << ", "
            << static_cast<int>(rec.status) << ", "
            << sql_escape(conn, rec.error_message) << ", '"
-           << timestamp_now() << "', '"
-           << timestamp_now() << "', '"
-           << timestamp_now() << "')";
+           << timestamp_to_iso({0,0}) << "', '"
+           << timestamp_to_iso({0,0}) << "', '"
+           << timestamp_to_iso({0,0}) << "')";
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
     int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
     drop_(conn);
@@ -346,7 +265,7 @@ bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
     std::ostringstream sql;
     sql << "UPDATE reconversions SET status=" << static_cast<int>(rec.status)
         << ", error_message=" << sql_escape(conn, rec.error_message)
-        << ", completed_at='" << timestamp_now() << "'"
+        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
         << " WHERE id=" << rec.id;
 
     bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
@@ -376,36 +295,69 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    // Clean up expired locks first (async, non-blocking).
+    // Start transaction for atomic lock acquisition.
+    if (mysql_query(conn, "START TRANSACTION") != 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+
+    std::string import_id_str = std::to_string(import_id);
+
+    // 1. Clean up expired locks for this import_id (mark as released).
     std::ostringstream cleanup_sql;
     cleanup_sql << "UPDATE `locks` SET released_at=NOW() "
-                << "WHERE import_id=" << import_id
+                << "WHERE import_id=" << import_id_str
                 << " AND released_at IS NULL"
                 << " AND expires_at < NOW()";
-    mysql_query(conn, cleanup_sql.str().c_str());  // Ignore errors, best-effort
+    if (mysql_query(conn, cleanup_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
 
-    // Use INSERT IGNORE with the partial unique index (uq_locks_import_id_active)
-    // This atomically acquires the lock if no active lock exists.
+    // 2. Check for any active (non-expired, non-released) lock.
+    std::ostringstream check_sql;
+    check_sql << "SELECT id FROM `locks` "
+              << "WHERE import_id=" << import_id_str
+              << " AND released_at IS NULL"
+              << " AND expires_at >= NOW()"
+              << " FOR UPDATE";
+    if (mysql_query(conn, check_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (res && mysql_num_rows(res) > 0) {
+        mysql_free_result(res);
+        mysql_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;  // Active lock already exists
+    }
+    mysql_free_result(res);
+
+    // 3. Insert new lock with proper expiry (1 hour from now).
     std::string holder_str = sql_escape(conn, holder);
     std::ostringstream insert_sql;
-    insert_sql << "INSERT IGNORE INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
-               << import_id << ", "
+    insert_sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
+               << import_id_str << ", "
                << holder_str << ", "
                << "NOW(), "
                << "DATE_ADD(NOW(), INTERVAL 1 HOUR))";
 
     if (mysql_query(conn, insert_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
-
-    // Check if insert succeeded (affected rows > 0 means we got the lock)
-    if (mysql_affected_rows(conn) == 0) {
-        drop_(conn);
-        return std::nullopt;  // Lock already held by another process
-    }
-
     int64_t lock_id = static_cast<int64_t>(mysql_insert_id(conn));
+
+    // Commit transaction.
+    if (mysql_query(conn, "COMMIT") != 0) {
+        mysql_query(conn, "ROLLBACK");
+        drop_(conn);
+        return std::nullopt;
+    }
     drop_(conn);
     return lock_id;
 }
@@ -558,7 +510,6 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON,"
         "    `status` ENUM('pending','converting','completed','failed','restored','legacy') DEFAULT 'pending',"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `error_message` TEXT,"
         "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
@@ -582,8 +533,6 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON NOT NULL,"
         "    `reason` TEXT,"
         "    `triggered_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-        "    `scheduled_at` TIMESTAMP NULL DEFAULT NULL,"
-        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `status` ENUM('pending','running','completed','failed') DEFAULT 'pending',"
         "    `error_message` TEXT"
@@ -601,7 +550,6 @@ bool MariadbImportStore::init_schema() {
         ") ENGINE=InnoDB",
         "CREATE INDEX IF NOT EXISTS `idx_locks_import_id` ON `locks`(`import_id`)",
         "CREATE INDEX IF NOT EXISTS `idx_locks_expires` ON `locks`(`expires_at`)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS `uq_locks_import_id_active` ON `locks`(`import_id`) WHERE `released_at` IS NULL",
         // alerts
         "CREATE TABLE IF NOT EXISTS `alerts` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
@@ -701,7 +649,7 @@ MariadbImportStore::list_migration_rows(const std::string& table,
         if (i) sql << ", ";
         sql << "`" << columns[i] << "`";
     }
-    sql << " FROM `" << table << "` ORDER BY `id`";
+    sql << " FROM `" << table << "`";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
@@ -714,7 +662,7 @@ MariadbImportStore::list_migration_rows(const std::string& table,
 
     std::vector<std::map<std::string, std::string>> result;
     MYSQL_ROW row;
-    unsigned int ncols = mysql_field_count(conn);
+    unsigned int ncols = mysql_num_fields(res);
     while ((row = mysql_fetch_row(res))) {
         std::map<std::string, std::string> r;
         for (unsigned int i = 0; i < ncols; ++i) {
