@@ -190,6 +190,10 @@ if(BUILD_TESTING)
   add_executable(infra_test tests/infrastructure/infra_test.cpp)
   set_target_properties(infra_test PROPERTIES CXX_STANDARD 20)
   target_include_directories(infra_test PRIVATE include src tests)
+  target_link_libraries(infra_test PRIVATE infrastructure)
+  if(HAVE_OPENSSL)
+    target_link_libraries(infra_test PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
+  endif()
   add_test(NAME infra_tests COMMAND infra_test)
 
   # Converter factory tests.

@@ -9,20 +9,39 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <iostream>
+#include <cstring>
 
 namespace rawimport::infrastructure {
 
 namespace {
 
 MariadbHandle db_connect(const std::string& conn_str) {
-    MariadbHandle conn = mariadb_connection();
-    if (!conn) return nullptr;
-    if (mariadb_options(conn, MariaDB_OPT_CONNECT_STRING, conn_str.c_str()) != 0) {
-        mariadb_close(conn);
-        return nullptr;
+    // Parse connection string: "host=X;user=Y;password=***;database=D"
+    std::string host, user, password, database;
+    std::stringstream ss(conn_str);
+    std::string pair;
+    while (std::getline(ss, pair, ';')) {
+        auto eq = pair.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = pair.substr(0, eq);
+        std::string val = pair.substr(eq + 1);
+        if (key == "host") host = val;
+        else if (key == "user") user = val;
+        else if (key == "password") password = val;
+        else if (key == "database") database = val;
     }
-    if (mariadb_real_connect(conn, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0) == NULL) {
-        mariadb_close(conn);
+
+    MariadbHandle conn = mysql_init(nullptr);
+    if (!conn) return nullptr;
+
+    if (!host.empty()) mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, "30");
+    if (mysql_real_connect(conn, host.empty() ? nullptr : host.c_str(),
+                           user.empty() ? nullptr : user.c_str(),
+                           password.empty() ? nullptr : password.c_str(),
+                           database.empty() ? nullptr : database.c_str(),
+                           0, nullptr, 0) == NULL) {
+        mysql_close(conn);
         return nullptr;
     }
     return conn;
@@ -30,7 +49,7 @@ MariadbHandle db_connect(const std::string& conn_str) {
 
 std::string sql_escape(MariadbHandle conn, const std::string& s) {
     std::string out(s.size() * 2 + 1, '\0');
-    size_t len = mariadb_escape_string(conn, &out[0], s.c_str(), s.size());
+    size_t len = mysql_real_escape_string(conn, &out[0], s.c_str(), s.size());
     out.resize(len);
     return out;
 }
@@ -86,23 +105,16 @@ MariadbImportStore::MariadbImportStore(std::string connection_string)
 
 MariadbImportStore::~MariadbImportStore() = default;
 
-MariadbImportStore::MariadbHandle MariadbImportStore::connect_() const {
+auto MariadbImportStore::connect_() const -> MariadbHandle {
     return db_connect(connection_string_);
 }
 
 void MariadbImportStore::drop_(MariadbHandle conn) const {
-    if (conn) mariadb_close(conn);
+    if (conn) mysql_close(conn);
 }
 
 std::string MariadbImportStore::sql_escape(MariadbHandle conn, const std::string& s) const {
-    // Use parameterized queries in production; this is a simplification.
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '"') out += "\"\"";
-        else out += c;
-    }
-    out += "\"";
-    return out;
+    return ::rawimport::infrastructure::sql_escape(conn, s);
 }
 
 // ── imports ───────────────────────────────────────────────────────────────────
@@ -131,11 +143,11 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            << "'" + timestamp_to_iso({0,0}) + "'"
            << ")";
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return std::nullopt;
     }
-    int64_t id = static_cast<int64_t>(mariadb_insert_id(conn));
+    int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
     drop_(conn);
     return id;
 }
@@ -146,15 +158,15 @@ std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
 
     std::ostringstream sql;
     sql << "SELECT * FROM imports WHERE sequence_id=" << id;
-    if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
+    if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
-    if (!res || mariadb_num_rows(res) == 0) { mariadb_result_free(res); return std::nullopt; }
+    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
-    MARIADB_ROW row = mariadb_fetch_row(res);
-    auto rec = row_to_import(row, mariadb_field_count(res));
-    mariadb_result_free(res);
+    MYSQL_ROW row = mysql_fetch_row(res);
+    auto rec = row_to_import(row, mysql_num_fields(res));
+    mysql_free_result(res);
     return rec;
 }
 
@@ -165,15 +177,15 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
     std::string hash_hex = domain::sha256_hex(hash);
     std::ostringstream sql;
     sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(conn, hash_hex) << " LIMIT 1";
-    if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
+    if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
-    if (!res || mariadb_num_rows(res) == 0) { mariadb_result_free(res); return std::nullopt; }
+    if (!res || mysql_num_rows(res) == 0) { mysql_free_result(res); return std::nullopt; }
 
-    MARIADB_ROW row = mariadb_fetch_row(res);
-    auto rec = row_to_import(row, mariadb_field_count(res));
-    mariadb_result_free(res);
+    MYSQL_ROW row = mysql_fetch_row(res);
+    auto rec = row_to_import(row, mysql_num_fields(res));
+    mysql_free_result(res);
     return rec;
 }
 
@@ -190,7 +202,7 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
         << ", output_hash=" << sql_escape(conn, output_hash_hex)
         << " WHERE sequence_id=" << rec.sequence_id;
 
-    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
     drop_(conn);
     return ok;
 }
@@ -205,17 +217,17 @@ std::vector<domain::ImportRecord> MariadbImportStore::list_imports(
     if (status_filter.has_value())
         sql << " WHERE status=" << static_cast<int>(*status_filter);
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return {}; }
+    if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return {}; }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return {};
 
     std::vector<domain::ImportRecord> result;
-    MARIADB_ROW row;
-    while ((row = mariadb_fetch_row(res)))
-        result.push_back(row_to_import(row, mariadb_field_count(res)));
-    mariadb_result_free(res);
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res)))
+        result.push_back(row_to_import(row, mysql_num_fields(res)));
+    mysql_free_result(res);
     return result;
 }
 
@@ -234,8 +246,8 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "')";
-    if (mariadb_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
-    int64_t id = static_cast<int64_t>(mariadb_insert_id(conn));
+    if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
+    int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
     drop_(conn);
     return id;
 }
@@ -256,7 +268,7 @@ bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
         << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
         << " WHERE id=" << rec.id;
 
-    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
     drop_(conn);
     return ok;
 }
@@ -284,7 +296,7 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
     if (!conn) return std::nullopt;
 
     // Start transaction for atomic lock acquisition.
-    if (mariadb_query(conn, "START TRANSACTION") != 0) {
+    if (mysql_query(conn, "START TRANSACTION") != 0) {
         drop_(conn);
         return std::nullopt;
     }
@@ -297,8 +309,8 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
                 << "WHERE import_id=" << import_id_str
                 << " AND released_at IS NULL"
                 << " AND expires_at < NOW()";
-    if (mariadb_query(conn, cleanup_sql.str().c_str()) != 0) {
-        mariadb_query(conn, "ROLLBACK");
+    if (mysql_query(conn, cleanup_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
@@ -310,19 +322,19 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
               << " AND released_at IS NULL"
               << " AND expires_at >= NOW()"
               << " FOR UPDATE";
-    if (mariadb_query(conn, check_sql.str().c_str()) != 0) {
-        mariadb_query(conn, "ROLLBACK");
+    if (mysql_query(conn, check_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
-    MARIADB_RES* res = mariadb_store_result(conn);
-    if (res && mariadb_num_rows(res) > 0) {
-        mariadb_result_free(res);
-        mariadb_query(conn, "ROLLBACK");
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (res && mysql_num_rows(res) > 0) {
+        mysql_free_result(res);
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;  // Active lock already exists
     }
-    mariadb_result_free(res);
+    mysql_free_result(res);
 
     // 3. Insert new lock with proper expiry (1 hour from now).
     std::string holder_str = sql_escape(conn, holder);
@@ -333,16 +345,16 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
                << "NOW(), "
                << "DATE_ADD(NOW(), INTERVAL 1 HOUR))";
 
-    if (mariadb_query(conn, insert_sql.str().c_str()) != 0) {
-        mariadb_query(conn, "ROLLBACK");
+    if (mysql_query(conn, insert_sql.str().c_str()) != 0) {
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
-    int64_t lock_id = static_cast<int64_t>(mariadb_insert_id(conn));
+    int64_t lock_id = static_cast<int64_t>(mysql_insert_id(conn));
 
     // Commit transaction.
-    if (mariadb_query(conn, "COMMIT") != 0) {
-        mariadb_query(conn, "ROLLBACK");
+    if (mysql_query(conn, "COMMIT") != 0) {
+        mysql_query(conn, "ROLLBACK");
         drop_(conn);
         return std::nullopt;
     }
@@ -358,7 +370,7 @@ bool MariadbImportStore::release_lock(int64_t lock_id) {
     std::ostringstream sql;
     sql << "UPDATE `locks` SET released_at=NOW() WHERE id=" << lock_id_str << " AND released_at IS NULL";
 
-    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
     drop_(conn);
     return ok;
 }
@@ -371,17 +383,17 @@ bool MariadbImportStore::is_locked(int64_t import_id) {
     std::ostringstream sql;
     sql << "SELECT COUNT(*) FROM `locks` WHERE import_id=" << import_id_str << " AND released_at IS NULL";
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return false;
     }
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return false;
     
-    MARIADB_ROW row = mariadb_fetch_row(res);
+    MYSQL_ROW row = mysql_fetch_row(res);
     bool locked = (row && row[0] && atoll(row[0]) > 0);
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return locked;
 }
 
@@ -389,17 +401,17 @@ std::vector<domain::Lock> MariadbImportStore::list_active_locks() {
     auto conn = connect_();
     if (!conn) return {};
     
-    if (mariadb_query(conn, "SELECT id, import_id, holder, acquired_at, expires_at, released_at FROM `locks` WHERE released_at IS NULL") != 0) {
+    if (mysql_query(conn, "SELECT id, import_id, holder, acquired_at, expires_at, released_at FROM `locks` WHERE released_at IS NULL") != 0) {
         drop_(conn);
         return {};
     }
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return {};
     
     std::vector<domain::Lock> result;
-    MARIADB_ROW row;
-    while ((row = mariadb_fetch_row(res))) {
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res))) {
         domain::Lock l;
         if (row[0]) l.id = atoll(row[0]);
         if (row[1]) l.import_id = atoll(row[1]);
@@ -407,7 +419,7 @@ std::vector<domain::Lock> MariadbImportStore::list_active_locks() {
         // Parse timestamps if needed
         result.push_back(l);
     }
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return result;
 }
 
@@ -416,29 +428,29 @@ int64_t MariadbImportStore::next_sequence_id() {
     auto conn = connect_();
     if (!conn) return -1;
     // Try sequences table first, fall back to MAX.
-    MARIADB_RES* res = nullptr;
-    if (mariadb_query(conn, "SELECT next_val FROM sequences WHERE seq_name='import'") == 0)
-        res = mariadb_store_result(conn);
-    if (res && mariadb_num_rows(res) > 0) {
-        MARIADB_ROW row = mariadb_fetch_row(res);
+    MYSQL_RES* res = nullptr;
+    if (mysql_query(conn, "SELECT next_val FROM sequences WHERE seq_name='import'") == 0)
+        res = mysql_store_result(conn);
+    if (res && mysql_num_rows(res) > 0) {
+        MYSQL_ROW row = mysql_fetch_row(res);
         int64_t val = row && row[0] ? atoll(row[0]) : -1;
-        mariadb_result_free(res);
-        mariadb_query(conn, "UPDATE sequences SET next_val=next_val+1 WHERE seq_name='import'");
+        mysql_free_result(res);
+        mysql_query(conn, "UPDATE sequences SET next_val=next_val+1 WHERE seq_name='import'");
         drop_(conn);
         return val;
     }
-    mariadb_result_free(res);
+    mysql_free_result(res);
     // Fallback: SELECT MAX(sequence_id) + 1
-    if (mariadb_query(conn, "SELECT COALESCE(MAX(sequence_id),0)+1 FROM imports") == 0) {
-        res = mariadb_store_result(conn);
-        if (res && mariadb_num_rows(res) > 0) {
-            MARIADB_ROW row = mariadb_fetch_row(res);
+    if (mysql_query(conn, "SELECT COALESCE(MAX(sequence_id),0)+1 FROM imports") == 0) {
+        res = mysql_store_result(conn);
+        if (res && mysql_num_rows(res) > 0) {
+            MYSQL_ROW row = mysql_fetch_row(res);
             int64_t val = row && row[0] ? atoll(row[0]) : 1;
-            mariadb_result_free(res);
+            mysql_free_result(res);
             drop_(conn);
             return val;
         }
-        mariadb_result_free(res);
+        mysql_free_result(res);
     }
     drop_(conn);
     return 1;
@@ -461,7 +473,7 @@ domain::HealthReport MariadbImportStore::health_check() {
     auto conn = connect_();
     if (!conn)
         return {domain::HealthStatus::Unhealthy, "MariaDB connection failed", domain::now()};
-    if (mariadb_query(conn, "SELECT 1") != 0) {
+    if (mysql_query(conn, "SELECT 1") != 0) {
         drop_(conn);
         return {domain::HealthStatus::Unhealthy, "MariaDB SELECT 1 failed", domain::now()};
     }
@@ -567,8 +579,8 @@ bool MariadbImportStore::init_schema() {
     };
 
     for (const char* sql : schema_sql) {
-        if (mariadb_query(conn, sql) != 0) {
-            std::cerr << "Schema init failed: " << mariadb_error(conn) << " (SQL: " << sql << ")\n";
+        if (mysql_query(conn, sql) != 0) {
+            std::cerr << "Schema init failed: " << mysql_error(conn) << " (SQL: " << sql << ")\n";
             drop_(conn);
             return false;
         }
@@ -597,24 +609,24 @@ bool MariadbImportStore::init_schema() {
             << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << fk.tbl
             << "' AND CONSTRAINT_NAME = '" << fk.name
             << "' AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
-        if (mariadb_query(conn, chk.str().c_str()) != 0) {
-            std::cerr << "Schema init check failed: " << mariadb_error(conn) << "\n";
+        if (mysql_query(conn, chk.str().c_str()) != 0) {
+            std::cerr << "Schema init check failed: " << mysql_error(conn) << "\n";
             drop_(conn);
             return false;
         }
-        MARIADB_RES* res = mariadb_store_result(conn);
+        MYSQL_RES* res = mysql_store_result(conn);
         drop_(conn);
         bool exists = false;
         if (res) {
-            MARIADB_ROW r = mariadb_fetch_row(res);
+            MYSQL_ROW r = mysql_fetch_row(res);
             exists = (r && r[0] && atoll(r[0]) > 0);
-            mariadb_result_free(res);
+            mysql_free_result(res);
         }
         conn = connect_();
         if (!conn) return false;
         if (exists) continue;
-        if (mariadb_query(conn, fk.sql) != 0) {
-            std::cerr << "Schema init FK failed: " << mariadb_error(conn)
+        if (mysql_query(conn, fk.sql) != 0) {
+            std::cerr << "Schema init FK failed: " << mysql_error(conn)
                       << " (SQL: " << fk.sql << ")\n";
             drop_(conn);
             return false;
@@ -639,26 +651,26 @@ MariadbImportStore::list_migration_rows(const std::string& table,
     }
     sql << " FROM `" << table << "`";
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return {};
     }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return {};
 
     std::vector<std::map<std::string, std::string>> result;
-    MARIADB_ROW row;
-    unsigned int ncols = mariadb_field_count(res);
-    while ((row = mariadb_fetch_row(res))) {
+    MYSQL_ROW row;
+    unsigned int ncols = mysql_num_fields(res);
+    while ((row = mysql_fetch_row(res))) {
         std::map<std::string, std::string> r;
         for (unsigned int i = 0; i < ncols; ++i) {
             r[columns[i]] = row[i] ? row[i] : "";
         }
         result.push_back(std::move(r));
     }
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return result;
 }
 
@@ -669,18 +681,18 @@ int64_t MariadbImportStore::count_migration_rows(const std::string& table) {
     std::ostringstream sql;
     sql << "SELECT COUNT(*) FROM `" << table << "`";
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return -1;
     }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return -1;
 
-    MARIADB_ROW row = mariadb_fetch_row(res);
+    MYSQL_ROW row = mysql_fetch_row(res);
     int64_t count = row && row[0] ? atoll(row[0]) : 0;
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return count;
 }
 
@@ -718,7 +730,7 @@ bool MariadbImportStore::bulk_insert_migration(const std::string& table,
         sql << ")";
     }
 
-    bool ok = (mariadb_query(conn, sql.str().c_str()) == 0);
+    bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
     drop_(conn);
     return ok;
 }
@@ -735,16 +747,16 @@ int64_t MariadbImportStore::get_max_pk(const std::string& table) {
         std::ostringstream sql;
         sql << "SELECT COALESCE(MAX(`" << pk << "`), -1) FROM `" << table << "`";
 
-        if (mariadb_query(conn, sql.str().c_str()) != 0) continue;
+        if (mysql_query(conn, sql.str().c_str()) != 0) continue;
 
-        MARIADB_RES* res = mariadb_store_result(conn);
+        MYSQL_RES* res = mysql_store_result(conn);
         if (res) {
-            MARIADB_ROW row = mariadb_fetch_row(res);
+            MYSQL_ROW row = mysql_fetch_row(res);
             if (row && row[0]) {
                 int64_t val = atoll(row[0]);
                 if (val > max_val) max_val = val;
             }
-            mariadb_result_free(res);
+            mysql_free_result(res);
         }
     }
 
@@ -756,7 +768,7 @@ bool MariadbImportStore::execute_migration_sql(const std::string& sql) {
     auto conn = connect_();
     if (!conn) return false;
 
-    bool ok = (mariadb_query(conn, sql.c_str()) == 0);
+    bool ok = (mysql_query(conn, sql.c_str()) == 0);
     drop_(conn);
     return ok;
 }
@@ -768,15 +780,15 @@ bool MariadbImportStore::table_exists(const std::string& table) {
     std::ostringstream sql;
     sql << "SELECT 1 FROM `" << table << "` LIMIT 1";
 
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return false;
     }
 
-    MARIADB_RES* res = mariadb_store_result(conn);
+    MYSQL_RES* res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return false;
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return true;
 }
 
@@ -792,8 +804,8 @@ int MariadbImportStore::expire_stale_locks(int64_t max_age_seconds) {
         << "AND expires_at < DATE_SUB(NOW(), INTERVAL " << max_age_seconds << " SECOND)";
 
     int affected = 0;
-    if (mariadb_query(conn, sql.str().c_str()) == 0) {
-        affected = static_cast<int>(mariadb_affected_rows(conn));
+    if (mysql_query(conn, sql.str().c_str()) == 0) {
+        affected = static_cast<int>(mysql_affected_rows(conn));
     }
     drop_(conn);
     return affected;
@@ -804,22 +816,22 @@ int64_t MariadbImportStore::count_active_locks() {
     auto conn = connect_();
     if (!conn) return -1;
 
-    MARIADB_RES* res = nullptr;
+    MYSQL_RES* res = nullptr;
     std::string tbl;
-    if (mariadb_query(conn,
+    if (mysql_query(conn,
         "SELECT TABLE_NAME FROM information_schema.TABLES "
         "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('locks','processing_locks') "
         "ORDER BY FIELD(TABLE_NAME,'locks','processing_locks') LIMIT 1") != 0) {
         drop_(conn);
         return -1;
     }
-    res = mariadb_store_result(conn);
+    res = mysql_store_result(conn);
     drop_(conn);
-    MARIADB_ROW r;
-    while ((r = mariadb_fetch_row(res))) {
+    MYSQL_ROW r;
+    while ((r = mysql_fetch_row(res))) {
         if (r[0]) tbl = r[0];
     }
-    mariadb_result_free(res);
+    mysql_free_result(res);
     if (tbl.empty()) return 0;
 
     conn = connect_();
@@ -829,16 +841,16 @@ int64_t MariadbImportStore::count_active_locks() {
         sql << "SELECT COUNT(*) FROM `locks` WHERE released_at IS NULL";
     else
         sql << "SELECT COUNT(*) FROM `processing_locks`";
-    if (mariadb_query(conn, sql.str().c_str()) != 0) {
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
         drop_(conn);
         return -1;
     }
-    res = mariadb_store_result(conn);
+    res = mysql_store_result(conn);
     drop_(conn);
     if (!res) return -1;
-    r = mariadb_fetch_row(res);
+    r = mysql_fetch_row(res);
     int64_t count = (r && r[0]) ? atoll(r[0]) : -1;
-    mariadb_result_free(res);
+    mysql_free_result(res);
     return count;
 }
 

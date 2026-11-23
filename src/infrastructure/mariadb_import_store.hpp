@@ -13,9 +13,15 @@
 
 #include "domain/ports/import_store.hpp"
 
-// Opaque MariaDB connection handle.
-struct st_mariadb;
-using MariadbHandle = st_mariadb*;
+// MariaDB connector-c is a drop-in replacement for MySQL client library.
+// It uses MySQL-compatible types (MYSQL, MYSQL_ROW, MYSQL_RES).
+// Use MYSQL* as the connection handle type.
+#include <mariadb/mysql.h>
+using MariadbHandle = MYSQL*;
+
+// Type aliases for code clarity (MariaDB connector uses MYSQL_ names).
+typedef MYSQL_ROW MARIADB_ROW;
+typedef MYSQL_RES MARIADB_RES;
 
 namespace rawimport::infrastructure {
 
