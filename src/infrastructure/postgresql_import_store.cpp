@@ -512,6 +512,7 @@ bool PostgresqlImportStore::init_schema() {
         "    name VARCHAR(32) NOT NULL UNIQUE,"
         "    created_at TIMESTAMPTZ DEFAULT NOW()"
         ")",
+        "INSERT INTO sequences (name) VALUES ('import') ON CONFLICT (name) DO NOTHING",
         "CREATE SEQUENCE IF NOT EXISTS imports_sequence_id_seq",
         // imports
         "CREATE TABLE IF NOT EXISTS imports ("
