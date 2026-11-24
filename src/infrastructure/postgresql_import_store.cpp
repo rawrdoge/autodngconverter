@@ -138,7 +138,13 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     if (!conn) return std::nullopt;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    int64_t sequence_id = next_sequence_id();
+    // Get the fixed sequence_id from sequences table (id for 'import' sequence)
+    int64_t sequence_id = -1;
+    PGresult* seq_res = PQexec(pgconn, "SELECT id FROM sequences WHERE name='import'");
+    if (PQresultStatus(seq_res) == PGRES_TUPLES_OK && PQntuples(seq_res) > 0) {
+        sequence_id = std::atoll(PQgetvalue(seq_res, 0, 0));
+    }
+    PQclear(seq_res);
     if (sequence_id <= 0) {
         drop_(conn);
         return std::nullopt;
