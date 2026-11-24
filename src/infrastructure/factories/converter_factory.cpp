@@ -127,6 +127,11 @@ std::unique_ptr<domain::ConverterEngine> MakeConverterEngine(
         }
         log_error(log, "Fallback Adobe DNG Converter also unhealthy: " + fallback_health.message);
 #else
+        // No Adobe DNG fallback available - accept degraded dnglab (CLI mode) as valid
+        if (health.status == domain::HealthStatus::Degraded) {
+            log_warn(log, "No fallback available, accepting degraded dnglab (CLI mode) as engine");
+            return engine;
+        }
         log_error(log, "No fallback available (WITH_ADOBE_DNG not enabled)");
 #endif
 
