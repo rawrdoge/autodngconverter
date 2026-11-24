@@ -502,6 +502,7 @@ bool MariadbImportStore::init_schema() {
         "    `next_val` BIGINT UNSIGNED NOT NULL DEFAULT 1,"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ") ENGINE=InnoDB",
+        "INSERT IGNORE INTO `sequences` (`seq_name`, `next_val`) VALUES ('import', 1)",
         // imports
         "CREATE TABLE IF NOT EXISTS `imports` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
