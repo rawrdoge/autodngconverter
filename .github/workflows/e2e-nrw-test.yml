@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p tools
           curl -fsSL -o tools/dnglab \
-            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+            "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
 
@@ -67,7 +67,7 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_DB_DRIVER: postgresql
-          E2E_DB_CONNECTION: postgresql://rawimport:test@localhost:5432/rawimport
+          E2E_DB_CONNECTION: postgresql://rawimport:***@localhost:5432/rawimport
           E2E_CONVERTER_ENGINE: dnglab
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
@@ -87,10 +87,10 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mysqladmin ping -h localhost -u rawimport -ptest"
+          --health-cmd "mysqladmin ping -h localhost -u root -ptest"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +104,7 @@ jobs:
         run: |
           mkdir -p tools
           curl -fsSL -o tools/dnglab \
-            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+            "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
 
@@ -129,7 +129,7 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_DB_DRIVER: mariadb
-          E2E_DB_CONNECTION: mysql://rawimport:test@localhost:3306/rawimport
+          E2E_DB_CONNECTION: host=localhost;user=rawimport;password=test;database=rawimport
           E2E_CONVERTER_ENGINE: dnglab
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
