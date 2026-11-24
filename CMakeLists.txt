@@ -216,7 +216,7 @@ if(BUILD_TESTING)
   target_include_directories(infra_test PRIVATE include src tests)
   target_link_libraries(infra_test PRIVATE infrastructure)
   if(HAVE_OPENSSL)
-    target_link_libraries(infra_test PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
+    target_link_libraries(infra_test PRIVATE OpenSSL::Crypto)
   endif()
   add_test(NAME infra_tests COMMAND infra_test)
 
