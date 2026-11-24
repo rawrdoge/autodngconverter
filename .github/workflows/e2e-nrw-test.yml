@@ -59,6 +59,38 @@ jobs:
         run: |
           dnglab --version || dnglab --help
 
+      - name: Prepare testsuite fixtures
+        run: |
+          mkdir -p testsuite
+          # Download a sample NRW file
+          curl -fsSL -o testsuite/sample1.NRW "https://filesamples.com/samples/image/nrw/sample1.nrw" || true
+          # If download fails or file is empty, create synthetic files with different sizes
+          if [ ! -f testsuite/sample1.NRW ] || [ ! -s testsuite/sample1.NRW ]; then
+            echo "Download failed, creating synthetic NRW files with different sizes..."
+            for i in $(seq 1 20); do
+              # Create files with different sizes (100KB + i KB) to ensure different hashes
+              dd if=/dev/urandom of="testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" bs=1K count=$((100 + i)) 2>/dev/null
+              # Try to add EXIF metadata to make them more realistic (may fail on random data)
+              exiftool -overwrite_original \
+                -Artist="Test Artist $i" \
+                -ImageDescription="E2E Test Image $i" \
+                -UserComment="Test comment $i" \
+                "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
+            done
+          else
+            # Create 20 distinct NRW files by copying and modifying EXIF metadata
+            for i in $(seq 1 20); do
+              cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
+              # Modify EXIF metadata to make each file unique (changes hash)
+              exiftool -overwrite_original \
+                -Artist="Test Artist $i" \
+                -ImageDescription="E2E Test Image $i" \
+                -UserComment="Test comment $i" \
+                "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
+            done
+          fi
+          ls -la testsuite/*.NRW | wc -l
+
       - name: Configure (E2E with PostgreSQL + dnglab)
         run: |
           cmake -S . -B build-e2e \
@@ -78,6 +110,7 @@ jobs:
           E2E_DB_DRIVER: postgresql
           E2E_DB_CONNECTION: postgresql://rawimport:test@localhost:5432/rawimport
           E2E_CONVERTER_ENGINE: dnglab
+          E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
 
@@ -131,6 +164,38 @@ jobs:
         run: |
           dnglab --version || dnglab --help
 
+      - name: Prepare testsuite fixtures
+        run: |
+          mkdir -p testsuite
+          # Download a sample NRW file
+          curl -fsSL -o testsuite/sample1.NRW "https://filesamples.com/samples/image/nrw/sample1.nrw" || true
+          # If download fails or file is empty, create synthetic files with different sizes
+          if [ ! -f testsuite/sample1.NRW ] || [ ! -s testsuite/sample1.NRW ]; then
+            echo "Download failed, creating synthetic NRW files with different sizes..."
+            for i in $(seq 1 20); do
+              # Create files with different sizes (100KB + i KB) to ensure different hashes
+              dd if=/dev/urandom of="testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" bs=1K count=$((100 + i)) 2>/dev/null
+              # Try to add EXIF metadata to make them more realistic (may fail on random data)
+              exiftool -overwrite_original \
+                -Artist="Test Artist $i" \
+                -ImageDescription="E2E Test Image $i" \
+                -UserComment="Test comment $i" \
+                "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
+            done
+          else
+            # Create 20 distinct NRW files by copying and modifying EXIF metadata
+            for i in $(seq 1 20); do
+              cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
+              # Modify EXIF metadata to make each file unique (changes hash)
+              exiftool -overwrite_original \
+                -Artist="Test Artist $i" \
+                -ImageDescription="E2E Test Image $i" \
+                -UserComment="Test comment $i" \
+                "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
+            done
+          fi
+          ls -la testsuite/*.NRW | wc -l
+
       - name: Configure (E2E with MariaDB + dnglab)
         run: |
           cmake -S . -B build-e2e \
@@ -150,5 +215,6 @@ jobs:
           E2E_DB_DRIVER: mariadb
           E2E_DB_CONNECTION: mysql://rawimport:test@localhost:3306/rawimport
           E2E_CONVERTER_ENGINE: dnglab
+          E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
