@@ -122,13 +122,20 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
+    int64_t sequence_id = next_sequence_id();
+    if (sequence_id <= 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+
     std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
-           " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
-           " created_at, started_at, completed_at)"
+    sql << "INSERT INTO `imports` (`sequence_id`, `source_path`, `source_hash`, `output_path`, `output_hash`, `status`, `error_message`,"
+           "` source_fingerprint_size`, `source_fingerprint_mtime`, `source_fingerprint_fnv1a`,"
+           "` created_at`, `started_at`, `completed_at`)"
            << " VALUES ("
+           << sequence_id << ", "
            << sql_escape(conn, rec.source_path.native) << ", "
            << sql_escape(conn, source_hash_hex) << ", "
            << sql_escape(conn, rec.output_path.native) << ", "
@@ -491,7 +498,8 @@ bool MariadbImportStore::init_schema() {
         // sequences
         "CREATE TABLE IF NOT EXISTS `sequences` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
-        "    `name` VARCHAR(32) NOT NULL UNIQUE,"
+        "    `seq_name` VARCHAR(32) NOT NULL UNIQUE,"
+        "    `next_val` BIGINT UNSIGNED NOT NULL DEFAULT 1,"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ") ENGINE=InnoDB",
         // imports
