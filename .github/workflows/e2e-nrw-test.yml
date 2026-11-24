@@ -99,7 +99,7 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_DB_DRIVER: postgresql
-          E2E_DB_CONNECTION: postgresql://rawimport:***@localhost:5432/rawimport
+          E2E_DB_CONNECTION: postgresql://rawimport:test@localhost:5432/rawimport
           E2E_CONVERTER_ENGINE: dnglab
           E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
