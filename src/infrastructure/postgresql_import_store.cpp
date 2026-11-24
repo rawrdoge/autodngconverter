@@ -138,13 +138,21 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     if (!conn) return std::nullopt;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
+    int64_t sequence_id = next_sequence_id();
+    if (sequence_id <= 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+
     std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
+    sql << "INSERT INTO imports (sequence_id, source_path, source_hash, output_path, output_hash, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
-           << " VALUES ('" << pg_escape(pgconn, rec.source_path.native) << "',"
+           << " VALUES ("
+           << sequence_id << ","
+           << "'" << pg_escape(pgconn, rec.source_path.native) << "',"
            << "'" << source_hash_hex << "',"
            << "'" << pg_escape(pgconn, rec.output_path.native) << "',"
            << "'" << output_hash_hex << "',"
