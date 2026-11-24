@@ -63,6 +63,8 @@ jobs:
               dd if=/dev/urandom of="testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" bs=1K count=$((100 + i)) 2>/dev/null
               # Try to add EXIF metadata to make them more realistic (may fail on random data)
               exiftool -overwrite_original \
+                -Make="NIKON CORPORATION" \
+                -Model="NIKON D70" \
                 -Artist="Test Artist $i" \
                 -ImageDescription="E2E Test Image $i" \
                 -UserComment="Test comment $i" \
@@ -74,6 +76,8 @@ jobs:
               cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
               # Modify EXIF metadata to make each file unique (changes hash)
               exiftool -overwrite_original \
+                -Make="NIKON CORPORATION" \
+                -Model="NIKON D70" \
                 -Artist="Test Artist $i" \
                 -ImageDescription="E2E Test Image $i" \
                 -UserComment="Test comment $i" \
@@ -159,6 +163,8 @@ jobs:
               dd if=/dev/urandom of="testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" bs=1K count=$((100 + i)) 2>/dev/null
               # Try to add EXIF metadata to make them more realistic (may fail on random data)
               exiftool -overwrite_original \
+                -Make="NIKON CORPORATION" \
+                -Model="NIKON D70" \
                 -Artist="Test Artist $i" \
                 -ImageDescription="E2E Test Image $i" \
                 -UserComment="Test comment $i" \
@@ -170,6 +176,8 @@ jobs:
               cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
               # Modify EXIF metadata to make each file unique (changes hash)
               exiftool -overwrite_original \
+                -Make="NIKON CORPORATION" \
+                -Model="NIKON D70" \
                 -Artist="Test Artist $i" \
                 -ImageDescription="E2E Test Image $i" \
                 -UserComment="Test comment $i" \
