@@ -615,13 +615,13 @@ bool MariadbImportStore::init_schema() {
             return false;
         }
         MYSQL_RES* res = mysql_store_result(conn);
-        drop_(conn);
         bool exists = false;
         if (res) {
             MYSQL_ROW r = mysql_fetch_row(res);
             exists = (r && r[0] && atoll(r[0]) > 0);
             mysql_free_result(res);
         }
+        drop_(conn);
         conn = connect_();
         if (!conn) return false;
         if (exists) continue;

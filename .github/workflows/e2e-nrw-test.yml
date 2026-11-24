@@ -1,0 +1,135 @@
+name: E2E Test with NRW Fixtures
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main", "pr/hex-v2" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-postgresql-dnglab:
+    name: E2E (PostgreSQL + dnglab)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgresql:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: rawimport
+          POSTGRES_USER: rawimport
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rawimport -d rawimport"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make libpq-dev libssl-dev libspdlog-dev exiftool
+
+      - name: Download dnglab binary
+        run: |
+          mkdir -p tools
+          curl -fsSL -o tools/dnglab \
+            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+          chmod +x tools/dnglab
+          echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
+
+      - name: Verify dnglab
+        run: |
+          dnglab --version || dnglab --help
+
+      - name: Configure (E2E with PostgreSQL + dnglab)
+        run: |
+          cmake -S . -B build-e2e \
+            -DWITH_HEXAGONAL=ON \
+            -DWITH_POSTGRESQL=ON \
+            -DWITH_DNGLAB=ON \
+            -DWITH_EXIFTOOL=ON \
+            -DWITH_SPDLOG=ON \
+            -DBUILD_TESTING=ON \
+            -DBUILD_E2E_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-e2e -j4
+
+      - name: Run E2E tests
+        env:
+          E2E_DB_DRIVER: postgresql
+          E2E_DB_CONNECTION: postgresql://rawimport:test@localhost:5432/rawimport
+          E2E_CONVERTER_ENGINE: dnglab
+        run: |
+          ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
+
+  e2e-mariadb-dnglab:
+    name: E2E (MariaDB + dnglab)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_DATABASE: rawimport
+          MARIADB_USER: rawimport
+          MARIADB_PASSWORD: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u rawimport -ptest"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make libmariadb-dev libssl-dev libspdlog-dev exiftool
+
+      - name: Download dnglab binary
+        run: |
+          mkdir -p tools
+          curl -fsSL -o tools/dnglab \
+            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+          chmod +x tools/dnglab
+          echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
+
+      - name: Verify dnglab
+        run: |
+          dnglab --version || dnglab --help
+
+      - name: Configure (E2E with MariaDB + dnglab)
+        run: |
+          cmake -S . -B build-e2e \
+            -DWITH_HEXAGONAL=ON \
+            -DWITH_MARIADB=ON \
+            -DWITH_DNGLAB=ON \
+            -DWITH_EXIFTOOL=ON \
+            -DWITH_SPDLOG=ON \
+            -DBUILD_TESTING=ON \
+            -DBUILD_E2E_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-e2e -j4
+
+      - name: Run E2E tests
+        env:
+          E2E_DB_DRIVER: mariadb
+          E2E_DB_CONNECTION: mysql://rawimport:test@localhost:3306/rawimport
+          E2E_CONVERTER_ENGINE: dnglab
+        run: |
+          ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
