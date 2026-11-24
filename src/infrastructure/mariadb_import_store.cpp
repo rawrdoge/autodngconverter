@@ -122,7 +122,16 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    int64_t sequence_id = next_sequence_id();
+    // Get the fixed sequence_id from sequences table (id for 'import' sequence)
+    int64_t sequence_id = -1;
+    if (mysql_query(conn, "SELECT `id` FROM `sequences` WHERE `seq_name`='import'") == 0) {
+        MYSQL_RES* res = mysql_store_result(conn);
+        if (res && mysql_num_rows(res) > 0) {
+            MYSQL_ROW row = mysql_fetch_row(res);
+            sequence_id = row && row[0] ? atoll(row[0]) : -1;
+        }
+        mysql_free_result(res);
+    }
     if (sequence_id <= 0) {
         drop_(conn);
         return std::nullopt;
