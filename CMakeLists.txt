@@ -259,9 +259,15 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(e2e_nrw_test tests/e2e/nrw_e2e_test.cpp)
-    set_target_properties(e2e_nrw_test PROPERTIES CXX_STANDARD 20)
-    target_include_directories(e2e_nrw_test PRIVATE include src tests)
-    target_link_libraries(e2e_nrw_test PRIVATE infrastructure domain)
+      set_target_properties(e2e_nrw_test PROPERTIES CXX_STANDARD 20)
+      target_include_directories(e2e_nrw_test PRIVATE include src tests)
+      target_compile_definitions(e2e_nrw_test PRIVATE
+        $<$<BOOL:${WITH_DNGLAB}>:WITH_DNGLAB=1>
+        $<$<BOOL:${WITH_ADOBE_DNG}>:WITH_ADOBE_DNG=1>
+        $<$<BOOL:${WITH_EXIFTOOL}>:WITH_EXIFTOOL=1>
+        $<$<BOOL:${HAVE_OPENSSL}>:HAVE_OPENSSL=1>
+      )
+      target_link_libraries(e2e_nrw_test PRIVATE infrastructure domain)
     # Propagate PostgreSQL include dirs (either full find_package or pkg-config fallback)
     if(WITH_POSTGRESQL)
       if(TARGET PostgreSQL::PostgreSQL)
