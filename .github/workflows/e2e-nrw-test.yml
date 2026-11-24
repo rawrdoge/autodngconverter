@@ -38,15 +38,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ make libpq-dev libssl-dev libspdlog-dev exiftool
 
-      - name: Download test fixtures
-        run: |
-          mkdir -p testsuite
-          curl -fsSL -o testsuite-nrw-v1.tar.gz \
-            "https://github.com/rawrdoge/autodngconverter/releases/download/testsuite-nrw-v1/testsuite-nrw-v1.tar.gz"
-          tar -xzf testsuite-nrw-v1.tar.gz -C testsuite
-          rm testsuite-nrw-v1.tar.gz
-          echo "Test fixtures downloaded: $(ls testsuite/*.NRW | wc -l) NRW files"
-
       - name: Download dnglab binary
         run: |
           mkdir -p tools
@@ -143,15 +134,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ make libmariadb-dev libssl-dev libspdlog-dev exiftool
 
-      - name: Download test fixtures
-        run: |
-          mkdir -p testsuite
-          curl -fsSL -o testsuite-nrw-v1.tar.gz \
-            "https://github.com/rawrdoge/autodngconverter/releases/download/testsuite-nrw-v1/testsuite-nrw-v1.tar.gz"
-          tar -xzf testsuite-nrw-v1.tar.gz -C testsuite
-          rm testsuite-nrw-v1.tar.gz
-          echo "Test fixtures downloaded: $(ls testsuite/*.NRW | wc -l) NRW files"
-
       - name: Download dnglab binary
         run: |
           mkdir -p tools
@@ -213,7 +195,7 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_DB_DRIVER: mariadb
-          E2E_DB_CONNECTION: mysql://rawimport:test@localhost:3306/rawimport
+          E2E_DB_CONNECTION: "host=localhost;user=rawimport;password=***;database=rawimport"
           E2E_CONVERTER_ENGINE: dnglab
           E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
