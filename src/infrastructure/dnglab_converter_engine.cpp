@@ -9,12 +9,14 @@
 #include <vector>
 #include <sstream>
 #include <cstdlib>
+#include <sys/wait.h>
 
 // dnglab is expected as a header-only or shared-lib dependency.
 // When present, include its public header.
 #ifdef __has_include
 #  if __has_include(<dnglab/converter.hpp>)
 #    include <dnglab/converter.hpp>
+#    define HAS_DNGLAB_LIBRARY 1
 #  endif
 #endif
 
@@ -27,26 +29,28 @@ DnglabConverterEngine::~DnglabConverterEngine() = default;
 domain::HealthReport DnglabConverterEngine::health_check() {
     // Try to instantiate the dnglab library converter to verify it's available at runtime.
     // If the library is linked but fails to initialize, we'll fall back to CLI mode.
+#if defined(HAS_DNGLAB_LIBRARY)
     try {
         dnglab::Converter converter;
         // If construction succeeds, the library is available
         return {domain::HealthStatus::Healthy, "dnglab library available", domain::now()};
     } catch (...) {
         // Library not available at runtime; check for CLI binary as fallback
-        const char* path_env = std::getenv("PATH");
-        if (!path_env) {
-            return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
-        }
-        std::istringstream ss(path_env);
-        std::string dir;
-        while (std::getline(ss, dir, ':')) {
-            auto p = std::filesystem::path(dir) / "dnglab";
-            if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
-                return {domain::HealthStatus::Degraded, "dnglab C++ library unavailable, CLI binary found", domain::now()};
-            }
-        }
+    }
+#endif
+    const char* path_env = std::getenv("PATH");
+    if (!path_env) {
         return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
     }
+    std::istringstream ss(path_env);
+    std::string dir;
+    while (std::getline(ss, dir, ':')) {
+        auto p = std::filesystem::path(dir) / "dnglab";
+        if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
+            return {domain::HealthStatus::Degraded, "dnglab C++ library unavailable, CLI binary found", domain::now()};
+        }
+    }
+    return {domain::HealthStatus::Unhealthy, "dnglab not found (no lib, no binary)", domain::now()};
 }
 
 std::vector<std::string> DnglabConverterEngine::supported_extensions() {
@@ -61,6 +65,7 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
                                                                 const domain::FilePath& dest,
                                                                 const domain::ConversionSettings& settings) {
     // Try library conversion first
+#if defined(HAS_DNGLAB_LIBRARY)
     try {
         dnglab::Converter converter;
         dnglab::ConvertOptions opts;
@@ -75,6 +80,7 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
     } catch (...) {
         // Fall through to CLI fallback
     }
+#endif
 
     // CLI fallback: invoke dnglab binary if available.
     const char* path_env = std::getenv("PATH");
