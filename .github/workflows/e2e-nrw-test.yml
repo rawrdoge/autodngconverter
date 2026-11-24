@@ -53,25 +53,7 @@ jobs:
       - name: Prepare testsuite fixtures
         run: |
           mkdir -p testsuite
-          # Download a sample NRW file with User-Agent to avoid 403
-          curl -H "User-Agent: Mozilla/5.0" -fsSL -o testsuite/sample1.NRW "https://filesamples.com/samples/image/nrw/sample1.nrw" || true
-          # If download fails or file is empty, skip E2E test
-          if [ ! -f testsuite/sample1.NRW ] || [ ! -s testsuite/sample1.NRW ]; then
-            echo "Download failed, skipping E2E test"
-            exit 0
-          fi
-          # Create 5 distinct NRW files by copying and modifying EXIF metadata
-          for i in $(seq 1 5); do
-            cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
-            # Modify EXIF metadata to make each file unique (changes hash)
-            exiftool -overwrite_original \
-              -Make="NIKON CORPORATION" \
-              -Model="NIKON D70" \
-              -Artist="Test Artist $i" \
-              -ImageDescription="E2E Test Image $i" \
-              -UserComment="Test comment $i" \
-              "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
-          done
+          python3 .github/workflows/create_nrw.py
           ls -la testsuite/*.NRW | wc -l
 
       - name: Configure (E2E with PostgreSQL + dnglab)
@@ -141,25 +123,7 @@ jobs:
       - name: Prepare testsuite fixtures
         run: |
           mkdir -p testsuite
-          # Download a sample NRW file with User-Agent to avoid 403
-          curl -H "User-Agent: Mozilla/5.0" -fsSL -o testsuite/sample1.NRW "https://filesamples.com/samples/image/nrw/sample1.nrw" || true
-          # If download fails or file is empty, skip E2E test
-          if [ ! -f testsuite/sample1.NRW ] || [ ! -s testsuite/sample1.NRW ]; then
-            echo "Download failed, skipping E2E test"
-            exit 0
-          fi
-          # Create 5 distinct NRW files by copying and modifying EXIF metadata
-          for i in $(seq 1 5); do
-            cp testsuite/sample1.NRW "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW"
-            # Modify EXIF metadata to make each file unique (changes hash)
-            exiftool -overwrite_original \
-              -Make="NIKON CORPORATION" \
-              -Model="NIKON D70" \
-              -Artist="Test Artist $i" \
-              -ImageDescription="E2E Test Image $i" \
-              -UserComment="Test comment $i" \
-              "testsuite/DSCN$(printf '%04d' $((7026 + i))).NRW" 2>/dev/null || true
-          done
+          python3 .github/workflows/create_nrw.py
           ls -la testsuite/*.NRW | wc -l
 
       - name: Configure (E2E with MariaDB + dnglab)
