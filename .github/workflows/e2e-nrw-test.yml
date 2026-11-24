@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p tools
           curl -fsSL -o tools/dnglab \
-            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+            "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
 
@@ -87,10 +87,11 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mysqladmin ping -h localhost -u rawimport -ptest"
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -ptest"
           --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-timeout 10s
+          --health-retries 15
+          --health-start-period 30s
 
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +105,7 @@ jobs:
         run: |
           mkdir -p tools
           curl -fsSL -o tools/dnglab \
-            "https://github.com/dnglab/dnglab/releases/download/v0.7.2/dnglab-linux-x64_v0.7.2"
+            "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
 
