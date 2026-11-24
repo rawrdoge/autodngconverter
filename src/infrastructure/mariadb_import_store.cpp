@@ -535,6 +535,7 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON,"
         "    `status` ENUM('pending','converting','completed','failed','restored','legacy') DEFAULT 'pending',"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `error_message` TEXT,"
         "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
