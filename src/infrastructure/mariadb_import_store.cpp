@@ -150,18 +150,18 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            "` created_at`, `started_at`, `completed_at`)"
            << " VALUES ("
            << sequence_id << ", "
-           << sql_escape(conn, rec.source_path.native) << ", "
-           << sql_escape(conn, source_hash_hex) << ", "
-           << sql_escape(conn, rec.output_path.native) << ", "
-           << sql_escape(conn, output_hash_hex) << ", "
+           << "'" << sql_escape(conn, rec.source_path.native) << "', "
+           << "'" << sql_escape(conn, source_hash_hex) << "', "
+           << "'" << sql_escape(conn, rec.output_path.native) << "', "
+           << "'" << sql_escape(conn, output_hash_hex) << "', "
            << static_cast<int>(rec.status) << ", "
-           << sql_escape(conn, rec.error_message) << ", "
+           << "'" << sql_escape(conn, rec.error_message) << "', "
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
            << rec.source_fingerprint.fnv1a << ", "
-           << "'" + timestamp_to_iso({0,0}) + "', "
-           << "'" + timestamp_to_iso({0,0}) + "', "
-           << "'" + timestamp_to_iso({0,0}) + "'"
+           << "'" << timestamp_to_iso({0,0}) << "', "
+           << "'" << timestamp_to_iso({0,0}) << "', "
+           << "'" << timestamp_to_iso({0,0}) << "'"
            << ")";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
@@ -219,10 +219,10 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
     sql << "UPDATE imports SET status=" << static_cast<int>(rec.status)
-        << ", error_message=" << sql_escape(conn, rec.error_message)
+        << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
         << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
-        << ", output_path=" << sql_escape(conn, rec.output_path.native)
-        << ", output_hash=" << sql_escape(conn, output_hash_hex)
+        << ", output_path='" << sql_escape(conn, rec.output_path.native) << "'"
+        << ", output_hash='" << sql_escape(conn, output_hash_hex) << "'"
         << " WHERE sequence_id=" << rec.sequence_id;
 
     bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
@@ -262,10 +262,10 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
     sql << "INSERT INTO reconversions (import_id, source_dng_path, output_dng_path, status,"
            " error_message, scheduled_at, started_at, completed_at)"
            << " VALUES (" << rec.import_id << ", "
-           << sql_escape(conn, rec.source_dng_path.native) << ", "
-           << sql_escape(conn, rec.output_dng_path.native) << ", "
+           << "'" << sql_escape(conn, rec.source_dng_path.native) << "', "
+           << "'" << sql_escape(conn, rec.output_dng_path.native) << "', "
            << static_cast<int>(rec.status) << ", "
-           << sql_escape(conn, rec.error_message) << ", '"
+           << "'" << sql_escape(conn, rec.error_message) << "', '"
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "', '"
            << timestamp_to_iso({0,0}) << "')";
@@ -287,7 +287,7 @@ bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
 
     std::ostringstream sql;
     sql << "UPDATE reconversions SET status=" << static_cast<int>(rec.status)
-        << ", error_message=" << sql_escape(conn, rec.error_message)
+        << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
         << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
         << " WHERE id=" << rec.id;
 
@@ -364,7 +364,7 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
     std::ostringstream insert_sql;
     insert_sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
                << import_id_str << ", "
-               << holder_str << ", "
+               << "'" << holder_str << "', "
                << "NOW(), "
                << "DATE_ADD(NOW(), INTERVAL 1 HOUR))";
 
