@@ -173,6 +173,19 @@ if(WITH_HEXAGONAL OR BUILD_TESTING)
         target_link_libraries(infrastructure PRIVATE m)
       endif()
     endif()
+    # Propagate feature flag definitions to consumers
+    if(WITH_DNGLAB)
+      target_compile_definitions(infrastructure INTERFACE WITH_DNGLAB=1)
+    endif()
+    if(WITH_ADOBE_DNG)
+      target_compile_definitions(infrastructure INTERFACE WITH_ADOBE_DNG=1)
+    endif()
+    if(WITH_EXIFTOOL)
+      target_compile_definitions(infrastructure INTERFACE WITH_EXIFTOOL=1)
+    endif()
+    if(HAVE_OPENSSL)
+      target_compile_definitions(infrastructure INTERFACE HAVE_OPENSSL=1)
+    endif()
   endif()
 
   # Domain library (types impl + use cases)
@@ -266,10 +279,10 @@ if(BUILD_TESTING)
       set_target_properties(e2e_nrw_test PROPERTIES CXX_STANDARD 20)
       target_include_directories(e2e_nrw_test PRIVATE include src tests)
       target_compile_definitions(e2e_nrw_test PRIVATE
-        $<$<BOOL:${WITH_DNGLAB}>:WITH_DNGLAB=1>
-        $<$<BOOL:${WITH_ADOBE_DNG}>:WITH_ADOBE_DNG=1>
-        $<$<BOOL:${WITH_EXIFTOOL}>:WITH_EXIFTOOL=1>
-        $<$<BOOL:${HAVE_OPENSSL}>:HAVE_OPENSSL=1>
+        $<$<STREQUAL:${WITH_DNGLAB},ON>:WITH_DNGLAB=1>
+        $<$<STREQUAL:${WITH_ADOBE_DNG},ON>:WITH_ADOBE_DNG=1>
+        $<$<STREQUAL:${WITH_EXIFTOOL},ON>:WITH_EXIFTOOL=1>
+        $<$<STREQUAL:${HAVE_OPENSSL},ON>:HAVE_OPENSSL=1>
       )
       target_link_libraries(e2e_nrw_test PRIVATE infrastructure domain)
     # Propagate PostgreSQL include dirs (either full find_package or pkg-config fallback)
