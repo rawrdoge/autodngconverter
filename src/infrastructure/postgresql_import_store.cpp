@@ -18,6 +18,8 @@ namespace {
 PGconn* pg_connect(const std::string& conninfo) {
     PGconn* conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
+        std::string err = PQerrorMessage(conn);
+        std::cerr << "[pg_connect] Connection failed: " << err << std::endl;
         PQfinish(conn);
         return nullptr;
     }
