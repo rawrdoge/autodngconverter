@@ -63,6 +63,17 @@ std::string timestamp_to_iso(timeval tv) {
     return std::string(buf);
 }
 
+// Map domain ImportStatus to MariaDB ENUM string.
+std::string status_to_mariadb_enum(domain::ImportStatus s) {
+    switch (s) {
+        case domain::ImportStatus::Queued:     return "pending";
+        case domain::ImportStatus::Converting: return "converting";
+        case domain::ImportStatus::Completed:  return "completed";
+        case domain::ImportStatus::Failed:     return "failed";
+        default:                               return "pending";
+    }
+}
+
 // Parse IMPORTS row into ImportRecord.
 domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
@@ -154,7 +165,7 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            << "'" << sql_escape(conn, source_hash_hex) << "', "
            << "'" << sql_escape(conn, rec.output_path.native) << "', "
            << "'" << sql_escape(conn, output_hash_hex) << "', "
-           << static_cast<int>(rec.status) << ", "
+           << "'" << status_to_mariadb_enum(rec.status) << "', "
            << "'" << sql_escape(conn, rec.error_message) << "', "
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
@@ -218,7 +229,7 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
 
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "UPDATE imports SET status=" << static_cast<int>(rec.status)
+    sql << "UPDATE imports SET status='" << status_to_mariadb_enum(rec.status) << "'"
         << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
         << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
         << ", output_path='" << sql_escape(conn, rec.output_path.native) << "'"
@@ -238,7 +249,7 @@ std::vector<domain::ImportRecord> MariadbImportStore::list_imports(
     std::ostringstream sql;
     sql << "SELECT * FROM imports";
     if (status_filter.has_value())
-        sql << " WHERE status=" << static_cast<int>(*status_filter);
+        sql << " WHERE status='" << status_to_mariadb_enum(*status_filter) << "'";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return {}; }
 

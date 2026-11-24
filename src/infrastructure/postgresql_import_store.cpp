@@ -51,6 +51,17 @@ std::string timestamp_now() {
     return std::string(buf);
 }
 
+// Map domain ImportStatus to PostgreSQL VARCHAR string.
+std::string status_to_pg_string(domain::ImportStatus s) {
+    switch (s) {
+        case domain::ImportStatus::Queued:     return "pending";
+        case domain::ImportStatus::Converting: return "converting";
+        case domain::ImportStatus::Completed:  return "completed";
+        case domain::ImportStatus::Failed:     return "failed";
+        default:                               return "pending";
+    }
+}
+
 // Parse PostgreSQL TIMESTAMPTZ string to time_point
 static domain::Instant parse_pg_timestamp(const char* str) {
     if (!str || !*str) return domain::Instant{};
@@ -164,7 +175,7 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
            << "'" << source_hash_hex << "',"
            << "'" << pg_escape(pgconn, rec.output_path.native) << "',"
            << "'" << output_hash_hex << "',"
-           << static_cast<int>(rec.status) << ","
+           << "'" << status_to_pg_string(rec.status) << "',"
            << "'" << pg_escape(pgconn, rec.error_message) << "',"
            << rec.source_fingerprint.size_bytes << ","
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ","
@@ -235,7 +246,7 @@ bool PostgresqlImportStore::update_import(domain::ImportRecord rec) {
     if (!conn) return false;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    std::string status_str = std::to_string(static_cast<int>(rec.status));
+    std::string status_str = status_to_pg_string(rec.status);
     std::string error_str = pg_escape(pgconn, rec.error_message);
     std::string output_str = pg_escape(pgconn, rec.output_path.native);
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
@@ -261,7 +272,7 @@ std::vector<domain::ImportRecord> PostgresqlImportStore::list_imports(
     std::ostringstream sql;
     sql << "SELECT * FROM imports";
     if (status_filter.has_value())
-        sql << " WHERE status=" << static_cast<int>(*status_filter);
+        sql << " WHERE status='" << status_to_pg_string(*status_filter) << "'";
     sql << " ORDER BY sequence_id DESC";
 
     PGresult* res = PQexec(pgconn, sql.str().c_str());
