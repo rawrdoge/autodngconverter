@@ -151,9 +151,9 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     if (!conn) return std::nullopt;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    // Get the fixed sequence_id from sequences table (id for 'import' sequence)
+    // Atomically get next sequence_id from the PostgreSQL sequence
     int64_t sequence_id = -1;
-    PGresult* seq_res = PQexec(pgconn, "SELECT id FROM sequences WHERE name='import'");
+    PGresult* seq_res = PQexec(pgconn, "SELECT nextval('imports_sequence_id_seq')");
     if (PQresultStatus(seq_res) == PGRES_TUPLES_OK && PQntuples(seq_res) > 0) {
         sequence_id = std::atoll(PQgetvalue(seq_res, 0, 0));
     }

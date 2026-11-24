@@ -134,19 +134,12 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    // Get the fixed sequence_id from sequences table (id for 'import' sequence)
+    // Atomically get and increment next sequence_id from sequences table
     int64_t sequence_id = -1;
-    if (mysql_query(conn, "SELECT `id` FROM `sequences` WHERE `seq_name`='import'") == 0) {
-        MYSQL_RES* res = mysql_store_result(conn);
-        if (res && mysql_num_rows(res) > 0) {
-            MYSQL_ROW row = mysql_fetch_row(res);
-            sequence_id = row && row[0] ? atoll(row[0]) : -1;
-        } else {
-            std::cerr << "[MariadbImportStore] No rows returned for sequence 'import'" << std::endl;
-        }
-        mysql_free_result(res);
+    if (mysql_query(conn, "UPDATE `sequences` SET `next_val` = LAST_INSERT_ID(`next_val` + 1) WHERE `seq_name` = 'import'") == 0) {
+        sequence_id = static_cast<int64_t>(mysql_insert_id(conn));
     } else {
-        std::cerr << "[MariadbImportStore] Sequence query failed: " << mysql_error(conn) << std::endl;
+        std::cerr << "[MariadbImportStore] Sequence increment failed: " << mysql_error(conn) << std::endl;
     }
     if (sequence_id <= 0) {
         drop_(conn);
@@ -181,9 +174,10 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
         drop_(conn);
         return std::nullopt;
     }
-    int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
+    // Note: mysql_insert_id won't work here since sequence_id is not auto_increment
+    // We already have the sequence_id we used
     drop_(conn);
-    return id;
+    return sequence_id;
 }
 
 std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
