@@ -41,6 +41,7 @@ MariadbHandle db_connect(const std::string& conn_str) {
                            password.empty() ? nullptr : password.c_str(),
                            database.empty() ? nullptr : database.c_str(),
                            0, nullptr, 0) == NULL) {
+        std::cerr << "[db_connect] MariaDB connection failed: " << mysql_error(conn) << std::endl;
         mysql_close(conn);
         return nullptr;
     }
