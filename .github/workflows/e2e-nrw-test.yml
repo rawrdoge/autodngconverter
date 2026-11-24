@@ -101,6 +101,7 @@ jobs:
           E2E_DB_DRIVER: postgresql
           E2E_DB_CONNECTION: postgresql://rawimport:***@localhost:5432/rawimport
           E2E_CONVERTER_ENGINE: dnglab
+          E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
 
@@ -119,10 +120,11 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mariadb-admin ping -h 127.0.0.1 -u root -ptest --silent"
+          --health-cmd "mariadb-admin ping --socket=/run/mysqld/mysqld.sock -u root -ptest"
           --health-interval 10s
-          --health-timeout 5s
+          --health-timeout 10s
           --health-retries 15
+          --health-start-period 30s
 
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +195,8 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_DB_DRIVER: mariadb
-          E2E_DB_CONNECTION: host=localhost;user=rawimport;password=test;database=rawimport
+          E2E_DB_CONNECTION: mysql://rawimport:***@localhost:3306/rawimport
           E2E_CONVERTER_ENGINE: dnglab
+          E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
