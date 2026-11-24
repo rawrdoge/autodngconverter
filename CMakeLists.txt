@@ -255,7 +255,9 @@ if(BUILD_TESTING)
     endif()
     # Test suite files must exist
     if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/testsuite/DSCN7027.NRW)
-      message(WARNING "BUILD_E2E_TESTS requested but testsuite fixtures not found in testsuite/. Skipping E2E tests.")
+      message(WARNING "BUILD_E2E_TESTS requested but testsuite fixtures not found in testsuite/.
+Skipping E2E tests. Download fixtures from:
+https://github.com/rawrdoge/autodngconverter/releases/download/testsuite-nrw-v1/testsuite-nrw-v1.tar.gz")
     else()
       add_executable(e2e_nrw_test tests/e2e/nrw_e2e_test.cpp)
       set_target_properties(e2e_nrw_test PROPERTIES CXX_STANDARD 20)

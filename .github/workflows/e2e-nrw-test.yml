@@ -38,6 +38,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ make libpq-dev libssl-dev libspdlog-dev exiftool
 
+      - name: Download test fixtures
+        run: |
+          mkdir -p testsuite
+          curl -fsSL -o testsuite-nrw-v1.tar.gz \
+            "https://github.com/rawrdoge/autodngconverter/releases/download/testsuite-nrw-v1/testsuite-nrw-v1.tar.gz"
+          tar -xzf testsuite-nrw-v1.tar.gz -C testsuite
+          rm testsuite-nrw-v1.tar.gz
+          echo "Test fixtures downloaded: $(ls testsuite/*.NRW | wc -l) NRW files"
+
       - name: Download dnglab binary
         run: |
           mkdir -p tools
@@ -100,6 +109,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake g++ make libmariadb-dev libssl-dev libspdlog-dev exiftool
+
+      - name: Download test fixtures
+        run: |
+          mkdir -p testsuite
+          curl -fsSL -o testsuite-nrw-v1.tar.gz \
+            "https://github.com/rawrdoge/autodngconverter/releases/download/testsuite-nrw-v1/testsuite-nrw-v1.tar.gz"
+          tar -xzf testsuite-nrw-v1.tar.gz -C testsuite
+          rm testsuite-nrw-v1.tar.gz
+          echo "Test fixtures downloaded: $(ls testsuite/*.NRW | wc -l) NRW files"
 
       - name: Download dnglab binary
         run: |
