@@ -539,7 +539,7 @@ bool PostgresqlImportStore::init_schema() {
         "    orientation SMALLINT,"
         "    source_fingerprint_size BIGINT,"
         "    source_fingerprint_mtime BIGINT,"
-        "    source_fingerprint_fnv1a BIGINT"
+        "    source_fingerprint_fnv1a NUMERIC(20)"
         ")",
         "CREATE INDEX IF NOT EXISTS idx_imports_source_hash ON imports(source_hash)",
         "CREATE INDEX IF NOT EXISTS idx_imports_output_hash ON imports(output_hash)",
