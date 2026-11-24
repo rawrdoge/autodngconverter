@@ -130,8 +130,12 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
         if (res && mysql_num_rows(res) > 0) {
             MYSQL_ROW row = mysql_fetch_row(res);
             sequence_id = row && row[0] ? atoll(row[0]) : -1;
+        } else {
+            std::cerr << "[MariadbImportStore] No rows returned for sequence 'import'" << std::endl;
         }
         mysql_free_result(res);
+    } else {
+        std::cerr << "[MariadbImportStore] Sequence query failed: " << mysql_error(conn) << std::endl;
     }
     if (sequence_id <= 0) {
         drop_(conn);
@@ -161,6 +165,8 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            << ")";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
+        std::cerr << "[MariadbImportStore] create_import failed: " << mysql_error(conn) << std::endl;
+        std::cerr << "[MariadbImportStore] Query: " << sql.str() << std::endl;
         drop_(conn);
         return std::nullopt;
     }
