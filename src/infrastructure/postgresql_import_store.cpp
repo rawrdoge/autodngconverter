@@ -616,12 +616,6 @@ bool PostgresqlImportStore::init_schema() {
         "CREATE INDEX IF NOT EXISTS idx_preview_edits_edited_at ON preview_edits(edited_at)",
         // foreign keys
         "DO $$ BEGIN "
-        "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_imports_sequence') THEN "
-        "    ALTER TABLE imports ADD CONSTRAINT fk_imports_sequence "
-        "    FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE RESTRICT; "
-        "  END IF; "
-        "END $$",
-        "DO $$ BEGIN "
         "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_reconversions_import') THEN "
         "    ALTER TABLE reconversions ADD CONSTRAINT fk_reconversions_import "
         "    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE; "
