@@ -16,7 +16,9 @@
 #ifdef HAVE_OPENSSL
 #include "../../src/infrastructure/openssl_hash_service.cpp"
 #endif
+#ifdef WITH_EXIFTOOL
 #include "../../src/infrastructure/exiftool_daemon_exif_extractor.cpp"
+#endif
 
 #include "domain/types.hpp"
 #include <fstream>
