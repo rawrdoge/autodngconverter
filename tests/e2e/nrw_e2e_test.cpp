@@ -35,17 +35,17 @@
 #include "domain/ports/log_sink.hpp"
 #include "domain/ports/metrics_sink.hpp"
 
-// Infrastructure adapters (pulled in for same-TU testing)
-#include "../../src/infrastructure/env_config_provider.cpp"
-#include "../../src/infrastructure/std_filesystem.cpp"
-#include "../../src/infrastructure/prometheus_metrics_sink.cpp"
+// Infrastructure adapters - include headers only, link libraries in CMake
+#include "infrastructure/env_config_provider.hpp"
+#include "infrastructure/std_filesystem.hpp"
+#include "infrastructure/prometheus_metrics_sink.hpp"
 
 #ifdef HAVE_OPENSSL
-#include "../../src/infrastructure/openssl_hash_service.cpp"
+#include "infrastructure/openssl_hash_service.hpp"
 #endif
 
 #ifdef WITH_EXIFTOOL
-#include "../../src/infrastructure/exiftool_daemon_exif_extractor.cpp"
+#include "infrastructure/exiftool_daemon_exif_extractor.hpp"
 #else
 // No-op extractor for testing without exiftool
 namespace rawimport::infrastructure {
@@ -62,25 +62,19 @@ struct NoopExifExtractor final : domain::ExifExtractor {
 #endif
 
 #ifdef WITH_POSTGRESQL
-#include "../../src/infrastructure/postgresql_import_store.cpp"
+#include "infrastructure/postgresql_import_store.hpp"
 #endif
 
 #ifdef WITH_MARIADB
-#include "../../src/infrastructure/mariadb_import_store.cpp"
+#include "infrastructure/mariadb_import_store.hpp"
 #endif
 
 #if defined(WITH_DNGLAB) || defined(WITH_ADOBE_DNG)
-#include "../../src/infrastructure/factories/converter_factory.cpp"
-#ifdef WITH_DNGLAB
-#include "../../src/infrastructure/dnglab_converter_engine.cpp"
-#endif
-#ifdef WITH_ADOBE_DNG
-#include "../../src/infrastructure/adobe_dng_converter_engine.cpp"
-#endif
+#include "infrastructure/factories/converter_factory.hpp"
 #endif
 
 #ifdef WITH_SPDLOG
-#include "../../src/infrastructure/spdlog_log_sink.cpp"
+#include "infrastructure/spdlog_log_sink.hpp"
 #else
 // No-op log sink
 namespace rawimport::infrastructure {
