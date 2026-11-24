@@ -412,7 +412,7 @@ struct E2ETestFixture {
             UTEST_ASSERT(filename.size() > 4 && filename.substr(filename.size() - 4) == ".dng");
 
             // Extract sequence number from filename (between "IMG_" and ".dng")
-            UTEST_ASSERT_GE(filename.size(), 8u);
+            UTEST_ASSERT(filename.size() >= 8u);
             std::string seq_str = filename.substr(4, filename.size() - 8); // Remove "IMG_" and ".dng"
             UTEST_ASSERT(!seq_str.empty());
             int64_t file_seq = std::stoll(seq_str);
