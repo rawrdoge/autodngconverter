@@ -103,7 +103,10 @@ std::optional<domain::FilePath> DnglabConverterEngine::convert(const domain::Fil
     if (settings.lossy) args.push_back("--lossy");
     if (settings.compression > 0) {
         args.push_back("--compression");
-        args.push_back(std::to_string(settings.compression));
+        args.push_back("lossless");
+    } else {
+        args.push_back("--compression");
+        args.push_back("uncompressed");
     }
     for (const auto& [k, v] : settings.extra) {
         args.push_back("--" + k);
