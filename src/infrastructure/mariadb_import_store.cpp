@@ -170,9 +170,9 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
            << rec.source_fingerprint.size_bytes << ", "
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
            << rec.source_fingerprint.fnv1a << ", "
-           << "'" << timestamp_to_iso({0,0}) << "', "
-           << "'" << timestamp_to_iso({0,0}) << "', "
-           << "'" << timestamp_to_iso({0,0}) << "'"
+           << "NOW(), "
+           << "NULL, "
+           << "NULL"
            << ")";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) {
