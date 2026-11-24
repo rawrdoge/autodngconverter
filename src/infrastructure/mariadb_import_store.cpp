@@ -146,8 +146,8 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
     sql << "INSERT INTO `imports` (`sequence_id`, `source_path`, `source_hash`, `output_path`, `output_hash`, `status`, `error_message`,"
-           "` source_fingerprint_size`, `source_fingerprint_mtime`, `source_fingerprint_fnv1a`,"
-           "` created_at`, `started_at`, `completed_at`)"
+           "`source_fingerprint_size`, `source_fingerprint_mtime`, `source_fingerprint_fnv1a`,"
+           "`created_at`, `started_at`, `completed_at`)"
            << " VALUES ("
            << sequence_id << ", "
            << "'" << sql_escape(conn, rec.source_path.native) << "', "
