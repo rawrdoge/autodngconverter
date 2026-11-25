@@ -624,9 +624,6 @@ bool MariadbImportStore::init_schema() {
         const char* tbl;
     };
     const FkEntry fks[] = {
-        {"ALTER TABLE `imports` ADD CONSTRAINT `fk_imports_sequence` "
-         "FOREIGN KEY (`sequence_id`) REFERENCES `sequences`(`id`) ON DELETE RESTRICT",
-         "fk_imports_sequence", "imports"},
         {"ALTER TABLE `reconversions` ADD CONSTRAINT `fk_reconversions_import` "
          "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
          "fk_reconversions_import", "reconversions"},
