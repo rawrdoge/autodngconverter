@@ -52,7 +52,7 @@ jobs:
 
       - name: Test dnglab on sample NRW
         run: |
-          dnglab testsuite/DSC_0001.NRW /tmp/test.dng 2>&1 || true
+          dnglab testsuite/DSCN7027.NRW /tmp/test.dng 2>&1 || true
 
       - name: Prepare testsuite fixtures
         run: |
@@ -126,7 +126,7 @@ jobs:
 
       - name: Test dnglab on sample NRW
         run: |
-          dnglab testsuite/DSC_0001.NRW /tmp/test.dng 2>&1 || true
+          dnglab testsuite/DSCN7027.NRW /tmp/test.dng 2>&1 || true
 
       - name: Prepare testsuite fixtures
         run: |
