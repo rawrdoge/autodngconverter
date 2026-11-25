@@ -148,3 +148,4 @@ jobs:
           E2E_TESTSUITE_DIR: ${{ github.workspace }}/testsuite
         run: |
           ctest --test-dir build-e2e --output-on-failure -R e2e_nrw
+
