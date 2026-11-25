@@ -223,7 +223,7 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
 
     std::string hash_hex = domain::sha256_hex(hash);
     std::ostringstream sql;
-    sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(conn, hash_hex) << " LIMIT 1";
+    sql << "SELECT * FROM imports WHERE source_hash='" << sql_escape(conn, hash_hex) << "' LIMIT 1";
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MYSQL_RES* res = mysql_store_result(conn);
