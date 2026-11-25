@@ -644,6 +644,38 @@ bool PostgresqlImportStore::init_schema() {
     return true;
 }
 
+bool PostgresqlImportStore::truncate_test_data() {
+    auto conn = connect_();
+    if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    // Truncate test data tables in dependency order (children first due to FKs)
+    const char* truncate_sql[] = {
+        "TRUNCATE TABLE preview_edits RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE alerts RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE locks RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE reconversions RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE imports RESTART IDENTITY CASCADE",
+        // Reset sequences table
+        "DELETE FROM sequences",
+        "ALTER SEQUENCE imports_sequence_id_seq RESTART WITH 1"
+    };
+
+    for (const char* sql : truncate_sql) {
+        PGresult* res = PQexec(pgconn, sql);
+        if (PQresultStatus(res) != PGRES_COMMAND_OK && PQresultStatus(res) != PGRES_TUPLES_OK) {
+            std::cerr << "Truncate test data failed: " << PQerrorMessage(pgconn) << " (SQL: " << sql << ")\n";
+            PQclear(res);
+            drop_(conn);
+            return false;
+        }
+        PQclear(res);
+    }
+
+    drop_(conn);
+    return true;
+}
+
 // ── migration streaming helpers ──────────────────────────────────────────────
 std::vector<std::map<std::string, std::string>>
 PostgresqlImportStore::list_migration_rows(const std::string& table,

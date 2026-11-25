@@ -292,6 +292,9 @@ struct E2ETestFixture {
         UTEST_ASSERT(health.status == HealthStatus::Healthy);
         UTEST_ASSERT(store_->init_schema());
 
+        // Clear any existing test data to ensure test isolation
+        UTEST_ASSERT(store_->truncate_test_data());
+
         // Converter engine
 #if defined(WITH_DNGLAB) || defined(WITH_ADOBE_DNG)
         engine_ = MakeConverterEngine(*config, log_);

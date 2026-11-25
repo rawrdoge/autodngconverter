@@ -667,6 +667,49 @@ bool MariadbImportStore::init_schema() {
     return true;
 }
 
+bool MariadbImportStore::truncate_test_data() {
+    auto conn = connect_();
+    if (!conn) return false;
+
+    // Disable foreign key checks to allow truncating in any order
+    if (mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 0") != 0) {
+        std::cerr << "Truncate test data failed (FK disable): " << mysql_error(conn) << "\n";
+        drop_(conn);
+        return false;
+    }
+
+    // Truncate test data tables
+    const char* truncate_sql[] = {
+        "TRUNCATE TABLE `preview_edits`",
+        "TRUNCATE TABLE `alerts`",
+        "TRUNCATE TABLE `locks`",
+        "TRUNCATE TABLE `reconversions`",
+        "TRUNCATE TABLE `imports`",
+        // Reset sequences table
+        "DELETE FROM `sequences`",
+        "INSERT IGNORE INTO `sequences` (`seq_name`, `next_val`) VALUES ('import', 1)"
+    };
+
+    for (const char* sql : truncate_sql) {
+        if (mysql_query(conn, sql) != 0) {
+            std::cerr << "Truncate test data failed: " << mysql_error(conn) << " (SQL: " << sql << ")\n";
+            mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 1");
+            drop_(conn);
+            return false;
+        }
+    }
+
+    // Re-enable foreign key checks
+    if (mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 1") != 0) {
+        std::cerr << "Truncate test data failed (FK enable): " << mysql_error(conn) << "\n";
+        drop_(conn);
+        return false;
+    }
+
+    drop_(conn);
+    return true;
+}
+
 // ── migration streaming helpers ──────────────────────────────────────────────
 std::vector<std::map<std::string, std::string>>
 MariadbImportStore::list_migration_rows(const std::string& table,
