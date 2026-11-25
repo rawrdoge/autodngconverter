@@ -41,7 +41,7 @@ jobs:
       - name: Download dnglab binary
         run: |
           mkdir -p tools
-          curl -fsSL -o tools/dnglab \
+          curl -fsSL -L -o tools/dnglab \
             "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
@@ -111,7 +111,7 @@ jobs:
       - name: Download dnglab binary
         run: |
           mkdir -p tools
-          curl -fsSL -o tools/dnglab \
+          curl -fsSL -L -o tools/dnglab \
             "https://github.com/dnglab/dnglab/releases/download/v0.8.0/dnglab_linux_x64"
           chmod +x tools/dnglab
           echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
