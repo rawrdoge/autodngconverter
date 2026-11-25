@@ -63,6 +63,16 @@ std::string timestamp_to_iso(timeval tv) {
     return std::string(buf);
 }
 
+std::string timestamp_now() {
+    auto tp = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(tp);
+    struct tm tm{};
+    gmtime_r(&tt, &tm);
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return std::string(buf);
+}
+
 // Map domain ImportStatus to MariaDB ENUM string.
 std::string status_to_mariadb_enum(domain::ImportStatus s) {
     switch (s) {
@@ -225,7 +235,7 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
     std::ostringstream sql;
     sql << "UPDATE imports SET status='" << status_to_mariadb_enum(rec.status) << "'"
         << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
-        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
+        << ", completed_at='" << timestamp_now() << "'"
         << ", output_path='" << sql_escape(conn, rec.output_path.native) << "'"
         << ", output_hash='" << sql_escape(conn, output_hash_hex) << "'"
         << " WHERE sequence_id=" << rec.sequence_id;
@@ -271,9 +281,9 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
            << "'" << sql_escape(conn, rec.output_dng_path.native) << "', "
            << static_cast<int>(rec.status) << ", "
            << "'" << sql_escape(conn, rec.error_message) << "', '"
-           << timestamp_to_iso({0,0}) << "', '"
-           << timestamp_to_iso({0,0}) << "', '"
-           << timestamp_to_iso({0,0}) << "')";
+           << timestamp_now() << "', '"
+           << timestamp_now() << "', '"
+           << timestamp_now() << "')";
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
     int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
     drop_(conn);
@@ -293,7 +303,7 @@ bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
     std::ostringstream sql;
     sql << "UPDATE reconversions SET status=" << static_cast<int>(rec.status)
         << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
-        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
+        << ", completed_at='" << timestamp_now() << "'"
         << " WHERE id=" << rec.id;
 
     bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
