@@ -53,7 +53,7 @@ jobs:
       - name: Prepare testsuite fixtures
         run: |
           mkdir -p testsuite
-          python3 .github/workflows/create_nrw.py
+          cp testsuite/fixtures/*.NRW testsuite/
           ls -la testsuite/*.NRW | wc -l
 
       - name: Check NRW files
@@ -130,7 +130,7 @@ jobs:
       - name: Prepare testsuite fixtures
         run: |
           mkdir -p testsuite
-          python3 .github/workflows/create_nrw.py
+          cp testsuite/fixtures/*.NRW testsuite/
           ls -la testsuite/*.NRW | wc -l
 
       - name: Check NRW files
