@@ -50,6 +50,10 @@ jobs:
         run: |
           dnglab --version || dnglab --help
 
+      - name: Test dnglab on sample NRW
+        run: |
+          dnglab testsuite/DSC_0001.NRW /tmp/test.dng 2>&1 || true
+
       - name: Prepare testsuite fixtures
         run: |
           mkdir -p testsuite
@@ -119,6 +123,10 @@ jobs:
       - name: Verify dnglab
         run: |
           dnglab --version || dnglab --help
+
+      - name: Test dnglab on sample NRW
+        run: |
+          dnglab testsuite/DSC_0001.NRW /tmp/test.dng 2>&1 || true
 
       - name: Prepare testsuite fixtures
         run: |
