@@ -62,6 +62,14 @@ std::string status_to_pg_string(domain::ImportStatus s) {
     }
 }
 
+// Parse PostgreSQL VARCHAR status string to domain ImportStatus.
+domain::ImportStatus string_to_import_status(const std::string& s) {
+    if (s == "completed") return domain::ImportStatus::Completed;
+    if (s == "converting") return domain::ImportStatus::Converting;
+    if (s == "failed") return domain::ImportStatus::Failed;
+    return domain::ImportStatus::Queued;  // "pending" or unknown
+}
+
 // Parse PostgreSQL TIMESTAMPTZ string to time_point
 static domain::Instant parse_pg_timestamp(const char* str) {
     if (!str || !*str) return domain::Instant{};
@@ -108,7 +116,7 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
+    r.status           = values[12] ? string_to_import_status(values[12])
                                    : domain::ImportStatus::Queued;  // status is column 13
     r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
     // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)

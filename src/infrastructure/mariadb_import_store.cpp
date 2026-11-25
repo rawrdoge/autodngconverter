@@ -84,6 +84,14 @@ std::string status_to_mariadb_enum(domain::ImportStatus s) {
     }
 }
 
+// Parse MariaDB ENUM status string to domain ImportStatus.
+domain::ImportStatus string_to_import_status(const std::string& s) {
+    if (s == "completed") return domain::ImportStatus::Completed;
+    if (s == "converting") return domain::ImportStatus::Converting;
+    if (s == "failed") return domain::ImportStatus::Failed;
+    return domain::ImportStatus::Queued;  // "pending" or unknown
+}
+
 // Parse IMPORTS row into ImportRecord.
 domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
     domain::ImportRecord r;
@@ -105,7 +113,8 @@ domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
+    r.status           = row[12] ? string_to_import_status(row[12])
+                                   : domain::ImportStatus::Queued;  // status is column 13
     r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
     // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
     if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
