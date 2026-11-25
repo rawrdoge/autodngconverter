@@ -56,5 +56,5 @@ def write_tiff_nrw(path, image_id):
         f.write(pixel_data)
 
 os.makedirs('testsuite', exist_ok=True)
-for i in range(1, 6):
+for i in range(1, 21):
     write_tiff_nrw(f'testsuite/DSCN{7026+i:04d}.NRW', i)
