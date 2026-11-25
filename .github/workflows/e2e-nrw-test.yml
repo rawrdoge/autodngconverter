@@ -50,21 +50,18 @@ jobs:
         run: |
           dnglab --version || dnglab --help
 
-      - name: Test dnglab on sample NRW
+      - name: Prepare testsuite fixtures
         run: |
-          dnglab testsuite/DSCN7027.NRW /tmp/test.dng 2>&1 || true
+          mkdir -p testsuite
+          python3 .github/workflows/create_nrw.py
+          ls -la testsuite/*.NRW | wc -l
+
       - name: Check NRW files
         run: |
           ls -la testsuite/*.NRW
           file testsuite/DSCN7027.NRW
           dnglab --version
           dnglab testsuite/DSCN7027.NRW /tmp/test.dng -v 2>&1 || true
-
-      - name: Prepare testsuite fixtures
-        run: |
-          mkdir -p testsuite
-          python3 .github/workflows/create_nrw.py
-          ls -la testsuite/*.NRW | wc -l
 
       - name: Configure (E2E with PostgreSQL + dnglab)
         run: |
@@ -130,21 +127,18 @@ jobs:
         run: |
           dnglab --version || dnglab --help
 
-      - name: Test dnglab on sample NRW
+      - name: Prepare testsuite fixtures
         run: |
-          dnglab testsuite/DSCN7027.NRW /tmp/test.dng 2>&1 || true
+          mkdir -p testsuite
+          python3 .github/workflows/create_nrw.py
+          ls -la testsuite/*.NRW | wc -l
+
       - name: Check NRW files
         run: |
           ls -la testsuite/*.NRW
           file testsuite/DSCN7027.NRW
           dnglab --version
           dnglab testsuite/DSCN7027.NRW /tmp/test.dng -v 2>&1 || true
-
-      - name: Prepare testsuite fixtures
-        run: |
-          mkdir -p testsuite
-          python3 .github/workflows/create_nrw.py
-          ls -la testsuite/*.NRW | wc -l
 
       - name: Configure (E2E with MariaDB + dnglab)
         run: |
