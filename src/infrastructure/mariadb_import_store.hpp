@@ -89,6 +89,9 @@ public:
     // ── schema initialization ──────────────────────────────────────────────────
     bool init_schema() override;
 
+    // ── test support ───────────────────────────────────────────────────────────
+    bool truncate_test_data() override;
+
 private:
     std::string connection_string_;
     MariadbHandle connect_() const;

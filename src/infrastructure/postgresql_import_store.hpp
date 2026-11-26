@@ -82,6 +82,9 @@ public:
     // ── schema initialization ──────────────────────────────────────────────────
     bool init_schema() override;
 
+    // ── test support ───────────────────────────────────────────────────────────
+    bool truncate_test_data() override;
+
 private:
     std::string conninfo_;
     PgConnHandle connect_() const;

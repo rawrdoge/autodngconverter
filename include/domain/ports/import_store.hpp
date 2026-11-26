@@ -85,6 +85,11 @@ public:
     // Create or upgrade database schema to the current version.
     // Returns true on success, false on failure.
     virtual bool init_schema() = 0;
+
+    // ── Test support ───────────────────────────────────────────────────────────
+    // Remove all test data from the database (truncate tables, reset sequences).
+    // Returns true on success, false on failure.
+    virtual bool truncate_test_data() = 0;
 };
 
 } // namespace rawimport::domain

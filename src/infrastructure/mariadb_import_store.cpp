@@ -41,6 +41,7 @@ MariadbHandle db_connect(const std::string& conn_str) {
                            password.empty() ? nullptr : password.c_str(),
                            database.empty() ? nullptr : database.c_str(),
                            0, nullptr, 0) == NULL) {
+        std::cerr << "[db_connect] MariaDB connection failed: " << mysql_error(conn) << std::endl;
         mysql_close(conn);
         return nullptr;
     }
@@ -60,6 +61,35 @@ std::string timestamp_to_iso(timeval tv) {
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
     return std::string(buf);
+}
+
+std::string timestamp_now() {
+    auto tp = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(tp);
+    struct tm tm{};
+    gmtime_r(&tt, &tm);
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return std::string(buf);
+}
+
+// Map domain ImportStatus to MariaDB ENUM string.
+std::string status_to_mariadb_enum(domain::ImportStatus s) {
+    switch (s) {
+        case domain::ImportStatus::Queued:     return "pending";
+        case domain::ImportStatus::Converting: return "converting";
+        case domain::ImportStatus::Completed:  return "completed";
+        case domain::ImportStatus::Failed:     return "failed";
+        default:                               return "pending";
+    }
+}
+
+// Parse MariaDB ENUM status string to domain ImportStatus.
+domain::ImportStatus string_to_import_status(const std::string& s) {
+    if (s == "completed") return domain::ImportStatus::Completed;
+    if (s == "converting") return domain::ImportStatus::Converting;
+    if (s == "failed") return domain::ImportStatus::Failed;
+    return domain::ImportStatus::Queued;  // "pending" or unknown
 }
 
 // Parse IMPORTS row into ImportRecord.
@@ -83,7 +113,8 @@ domain::ImportRecord row_to_import(MARIADB_ROW row, unsigned int ncols) {
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = static_cast<domain::ImportStatus>(row[12] ? std::atoi(row[12]) : 0);  // status is column 13
+    r.status           = row[12] ? string_to_import_status(row[12])
+                                   : domain::ImportStatus::Queued;  // status is column 13
     r.error_message    = row[15] ? row[15] : "";  // error_message is column 16
     // source_fingerprint columns (19, 20, 21 - indices 18, 19, 20)
     if (row[18]) r.source_fingerprint.size_bytes = atoll(row[18]);
@@ -122,34 +153,50 @@ std::optional<int64_t> MariadbImportStore::create_import(const domain::ImportRec
     auto conn = connect_();
     if (!conn) return std::nullopt;
 
-    std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
-    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
-    std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
-           " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
-           " created_at, started_at, completed_at)"
-           << " VALUES ("
-           << sql_escape(conn, rec.source_path.native) << ", "
-           << sql_escape(conn, source_hash_hex) << ", "
-           << sql_escape(conn, rec.output_path.native) << ", "
-           << sql_escape(conn, output_hash_hex) << ", "
-           << static_cast<int>(rec.status) << ", "
-           << sql_escape(conn, rec.error_message) << ", "
-           << rec.source_fingerprint.size_bytes << ", "
-           << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
-           << rec.source_fingerprint.fnv1a << ", "
-           << "'" + timestamp_to_iso({0,0}) + "', "
-           << "'" + timestamp_to_iso({0,0}) + "', "
-           << "'" + timestamp_to_iso({0,0}) + "'"
-           << ")";
-
-    if (mysql_query(conn, sql.str().c_str()) != 0) {
+    // Atomically get and increment next sequence_id from sequences table
+    int64_t sequence_id = -1;
+    if (mysql_query(conn, "UPDATE `sequences` SET `next_val` = LAST_INSERT_ID(`next_val` + 1) WHERE `seq_name` = 'import'") == 0) {
+        sequence_id = static_cast<int64_t>(mysql_insert_id(conn));
+    } else {
+        std::cerr << "[MariadbImportStore] Sequence increment failed: " << mysql_error(conn) << std::endl;
+    }
+    if (sequence_id <= 0) {
         drop_(conn);
         return std::nullopt;
     }
-    int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
+
+    std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
+    std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
+    std::ostringstream sql;
+    sql << "INSERT INTO `imports` (`sequence_id`, `source_path`, `source_hash`, `output_path`, `output_hash`, `status`, `error_message`,"
+           "`source_fingerprint_size`, `source_fingerprint_mtime`, `source_fingerprint_fnv1a`,"
+           "`created_at`, `started_at`, `completed_at`)"
+           << " VALUES ("
+           << sequence_id << ", "
+           << "'" << sql_escape(conn, rec.source_path.native) << "', "
+           << "'" << sql_escape(conn, source_hash_hex) << "', "
+           << "'" << sql_escape(conn, rec.output_path.native) << "', "
+           << "'" << sql_escape(conn, output_hash_hex) << "', "
+           << "'" << status_to_mariadb_enum(rec.status) << "', "
+           << "'" << sql_escape(conn, rec.error_message) << "', "
+           << rec.source_fingerprint.size_bytes << ", "
+           << rec.source_fingerprint.mtime.time_since_epoch().count() << ", "
+           << rec.source_fingerprint.fnv1a << ", "
+           << "NOW(), "
+           << "NULL, "
+           << "NULL"
+           << ")";
+
+    if (mysql_query(conn, sql.str().c_str()) != 0) {
+        std::cerr << "[MariadbImportStore] create_import failed: " << mysql_error(conn) << std::endl;
+        std::cerr << "[MariadbImportStore] Query: " << sql.str() << std::endl;
+        drop_(conn);
+        return std::nullopt;
+    }
+    // Note: mysql_insert_id won't work here since sequence_id is not auto_increment
+    // We already have the sequence_id we used
     drop_(conn);
-    return id;
+    return sequence_id;
 }
 
 std::optional<domain::ImportRecord> MariadbImportStore::get_import(int64_t id) {
@@ -176,7 +223,7 @@ std::optional<domain::ImportRecord> MariadbImportStore::find_import_by_source_ha
 
     std::string hash_hex = domain::sha256_hex(hash);
     std::ostringstream sql;
-    sql << "SELECT * FROM imports WHERE source_hash=" << sql_escape(conn, hash_hex) << " LIMIT 1";
+    sql << "SELECT * FROM imports WHERE source_hash='" << sql_escape(conn, hash_hex) << "' LIMIT 1";
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
 
     MYSQL_RES* res = mysql_store_result(conn);
@@ -195,11 +242,11 @@ bool MariadbImportStore::update_import(domain::ImportRecord rec) {
 
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "UPDATE imports SET status=" << static_cast<int>(rec.status)
-        << ", error_message=" << sql_escape(conn, rec.error_message)
-        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
-        << ", output_path=" << sql_escape(conn, rec.output_path.native)
-        << ", output_hash=" << sql_escape(conn, output_hash_hex)
+    sql << "UPDATE imports SET status='" << status_to_mariadb_enum(rec.status) << "'"
+        << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
+        << ", completed_at='" << timestamp_now() << "'"
+        << ", output_path='" << sql_escape(conn, rec.output_path.native) << "'"
+        << ", output_hash='" << sql_escape(conn, output_hash_hex) << "'"
         << " WHERE sequence_id=" << rec.sequence_id;
 
     bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
@@ -215,7 +262,7 @@ std::vector<domain::ImportRecord> MariadbImportStore::list_imports(
     std::ostringstream sql;
     sql << "SELECT * FROM imports";
     if (status_filter.has_value())
-        sql << " WHERE status=" << static_cast<int>(*status_filter);
+        sql << " WHERE status='" << status_to_mariadb_enum(*status_filter) << "'";
 
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return {}; }
 
@@ -239,13 +286,13 @@ std::optional<int64_t> MariadbImportStore::create_reconversion(const domain::Rec
     sql << "INSERT INTO reconversions (import_id, source_dng_path, output_dng_path, status,"
            " error_message, scheduled_at, started_at, completed_at)"
            << " VALUES (" << rec.import_id << ", "
-           << sql_escape(conn, rec.source_dng_path.native) << ", "
-           << sql_escape(conn, rec.output_dng_path.native) << ", "
+           << "'" << sql_escape(conn, rec.source_dng_path.native) << "', "
+           << "'" << sql_escape(conn, rec.output_dng_path.native) << "', "
            << static_cast<int>(rec.status) << ", "
-           << sql_escape(conn, rec.error_message) << ", '"
-           << timestamp_to_iso({0,0}) << "', '"
-           << timestamp_to_iso({0,0}) << "', '"
-           << timestamp_to_iso({0,0}) << "')";
+           << "'" << sql_escape(conn, rec.error_message) << "', '"
+           << timestamp_now() << "', '"
+           << timestamp_now() << "', '"
+           << timestamp_now() << "')";
     if (mysql_query(conn, sql.str().c_str()) != 0) { drop_(conn); return std::nullopt; }
     int64_t id = static_cast<int64_t>(mysql_insert_id(conn));
     drop_(conn);
@@ -264,8 +311,8 @@ bool MariadbImportStore::update_reconversion(domain::ReconversionRecord rec) {
 
     std::ostringstream sql;
     sql << "UPDATE reconversions SET status=" << static_cast<int>(rec.status)
-        << ", error_message=" << sql_escape(conn, rec.error_message)
-        << ", completed_at='" << timestamp_to_iso({0,0}) << "'"
+        << ", error_message='" << sql_escape(conn, rec.error_message) << "'"
+        << ", completed_at='" << timestamp_now() << "'"
         << " WHERE id=" << rec.id;
 
     bool ok = (mysql_query(conn, sql.str().c_str()) == 0);
@@ -341,7 +388,7 @@ std::optional<int64_t> MariadbImportStore::acquire_lock(int64_t import_id, const
     std::ostringstream insert_sql;
     insert_sql << "INSERT INTO `locks` (import_id, holder, acquired_at, expires_at) VALUES ("
                << import_id_str << ", "
-               << holder_str << ", "
+               << "'" << holder_str << "', "
                << "NOW(), "
                << "DATE_ADD(NOW(), INTERVAL 1 HOUR))";
 
@@ -486,14 +533,138 @@ bool MariadbImportStore::init_schema() {
     auto conn = connect_();
     if (!conn) return false;
 
+    // ── Idempotent upgrade path for existing MariaDB installs ────────────────────
+    // Run BEFORE schema_sql so that columns exist before CREATE TABLE IF NOT EXISTS
+    // and INSERT IGNORE statements. On a fresh DB the tables don't exist yet and
+    // the steps are silently skipped; on a legacy DB missing columns are added so
+    // that the subsequent INSERT IGNORE succeeds.
+    //
+    // 1. Add seq_name to sequences if missing (legacy has `name` column instead)
+    // 2. Add next_val to sequences if missing, backfill from imports
+    // 3. Add started_at to imports if absent
+    // 4. Drop obsolete imports.sequence_id -> sequences(id) FK if present
+
+    // Helper: execute a SQL statement and reconnect on error
+    auto do_sql = [&](const char* sql) -> bool {
+        if (mysql_query(conn, sql) != 0) {
+            std::cerr << "SQL upgrade step failed: " << mysql_error(conn) << " (SQL: " << sql << ")\n";
+            drop_(conn);
+            conn = connect_();
+            if (!conn) return false;
+            return false;
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return true;
+    };
+
+    // Helper: check whether a column exists in a given table
+    auto col_exists = [&](const char* table, const char* col) -> bool {
+        std::ostringstream q;
+        q << "SELECT COUNT(*) FROM information_schema.COLUMNS "
+          << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << table
+          << "' AND COLUMN_NAME = '" << col << "'";
+        if (!do_sql(q.str().c_str())) return false;
+        MYSQL_RES* r = mysql_store_result(conn);
+        bool exists = false;
+        if (r) {
+            MYSQL_ROW row = mysql_fetch_row(r);
+            exists = (row && row[0] && std::atoi(row[0]) > 0);
+            mysql_free_result(r);
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return exists;
+    };
+
+    // Helper: check whether a table exists
+    auto table_exists = [&](const char* tbl) -> bool {
+        std::ostringstream q;
+        q << "SELECT COUNT(*) FROM information_schema.TABLES "
+          << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << tbl << "'";
+        if (!do_sql(q.str().c_str())) return false;
+        MYSQL_RES* r = mysql_store_result(conn);
+        bool ex = false;
+        if (r) {
+            MYSQL_ROW row = mysql_fetch_row(r);
+            ex = (row && row[0] && std::atoi(row[0]) > 0);
+            mysql_free_result(r);
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return ex;
+    };
+
+    // 1. Add seq_name to sequences if missing
+    if (table_exists("sequences")) {
+        if (!col_exists("sequences", "seq_name")) {
+            if (!do_sql("ALTER TABLE sequences ADD COLUMN `seq_name` VARCHAR(32) NULL DEFAULT NULL AFTER `id`")) return false;
+            if (col_exists("sequences", "name")) {
+                do_sql("UPDATE sequences SET seq_name = name");
+            }
+        }
+    }
+
+    // 2. Add next_val to sequences if missing, backfill
+    if (table_exists("sequences")) {
+        if (!col_exists("sequences", "next_val")) {
+            if (!do_sql("ALTER TABLE sequences ADD COLUMN `next_val` BIGINT UNSIGNED NOT NULL DEFAULT 1")) return false;
+            if (!do_sql("UPDATE sequences s JOIN (SELECT COALESCE(MAX(sequence_id),0) AS mx FROM imports) i SET s.next_val = i.mx + 1 WHERE s.seq_name = 'import'")) return false;
+        }
+    }
+
+    // 3. Add started_at to imports if absent
+    if (table_exists("imports")) {
+        if (!col_exists("imports", "started_at")) {
+            if (!do_sql("ALTER TABLE imports ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL")) return false;
+        }
+    }
+
+    // 4. Drop obsolete imports.sequence_id -> sequences(id) FK if present
+    if (table_exists("imports")) {
+        std::ostringstream fk_check;
+        fk_check << "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS "
+                 << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'imports' "
+                 << "AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
+        if (do_sql(fk_check.str().c_str())) {
+            MYSQL_RES* fkres = mysql_store_result(conn);
+            if (fkres) {
+                while (MYSQL_ROW fkrow = mysql_fetch_row(fkres)) {
+                    std::string fkname = fkrow[0];
+                    std::ostringstream ref_q;
+                    ref_q << "SELECT REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE "
+                          << "WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = '" << fkname << "'";
+                    if (do_sql(ref_q.str().c_str())) {
+                        MYSQL_RES* tres = mysql_store_result(conn);
+                        if (tres) {
+                            MYSQL_ROW trow = mysql_fetch_row(tres);
+                            if (trow && std::string(trow[0]) == "sequences") {
+                                std::ostringstream drop_sql;
+                                drop_sql << "ALTER TABLE imports DROP FOREIGN KEY " << fkname;
+                                do_sql(drop_sql.str().c_str());
+                            }
+                            mysql_free_result(tres);
+                        }
+                    }
+                }
+                mysql_free_result(fkres);
+            }
+        }
+    }
+
     // MariaDB/MySQL schema (uses backticks for identifiers)
     const char* schema_sql[] = {
         // sequences
         "CREATE TABLE IF NOT EXISTS `sequences` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
-        "    `name` VARCHAR(32) NOT NULL UNIQUE,"
+        "    `seq_name` VARCHAR(32) NOT NULL UNIQUE,"
+        "    `next_val` BIGINT UNSIGNED NOT NULL DEFAULT 1,"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ") ENGINE=InnoDB",
+        "INSERT IGNORE INTO `sequences` (`seq_name`, `next_val`) VALUES ('import', 1)",
         // imports
         "CREATE TABLE IF NOT EXISTS `imports` ("
         "    `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
@@ -510,6 +681,7 @@ bool MariadbImportStore::init_schema() {
         "    `conversion_settings` JSON,"
         "    `status` ENUM('pending','converting','completed','failed','restored','legacy') DEFAULT 'pending',"
         "    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+        "    `started_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `completed_at` TIMESTAMP NULL DEFAULT NULL,"
         "    `error_message` TEXT,"
         "    `last_preview_edit_at` TIMESTAMP NULL DEFAULT NULL,"
@@ -593,9 +765,6 @@ bool MariadbImportStore::init_schema() {
         const char* tbl;
     };
     const FkEntry fks[] = {
-        {"ALTER TABLE `imports` ADD CONSTRAINT `fk_imports_sequence` "
-         "FOREIGN KEY (`sequence_id`) REFERENCES `sequences`(`id`) ON DELETE RESTRICT",
-         "fk_imports_sequence", "imports"},
         {"ALTER TABLE `reconversions` ADD CONSTRAINT `fk_reconversions_import` "
          "FOREIGN KEY (`import_id`) REFERENCES `imports`(`id`) ON DELETE CASCADE",
          "fk_reconversions_import", "reconversions"},
@@ -633,6 +802,49 @@ bool MariadbImportStore::init_schema() {
         }
     }
 
+    return true;
+}
+
+bool MariadbImportStore::truncate_test_data() {
+    auto conn = connect_();
+    if (!conn) return false;
+
+    // Disable foreign key checks to allow truncating in any order
+    if (mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 0") != 0) {
+        std::cerr << "Truncate test data failed (FK disable): " << mysql_error(conn) << "\n";
+        drop_(conn);
+        return false;
+    }
+
+    // Truncate test data tables
+    const char* truncate_sql[] = {
+        "TRUNCATE TABLE `preview_edits`",
+        "TRUNCATE TABLE `alerts`",
+        "TRUNCATE TABLE `locks`",
+        "TRUNCATE TABLE `reconversions`",
+        "TRUNCATE TABLE `imports`",
+        // Reset sequences table
+        "DELETE FROM `sequences`",
+        "INSERT IGNORE INTO `sequences` (`seq_name`, `next_val`) VALUES ('import', 1)"
+    };
+
+    for (const char* sql : truncate_sql) {
+        if (mysql_query(conn, sql) != 0) {
+            std::cerr << "Truncate test data failed: " << mysql_error(conn) << " (SQL: " << sql << ")\n";
+            mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 1");
+            drop_(conn);
+            return false;
+        }
+    }
+
+    // Re-enable foreign key checks
+    if (mysql_query(conn, "SET FOREIGN_KEY_CHECKS = 1") != 0) {
+        std::cerr << "Truncate test data failed (FK enable): " << mysql_error(conn) << "\n";
+        drop_(conn);
+        return false;
+    }
+
+    drop_(conn);
     return true;
 }
 

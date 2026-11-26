@@ -18,6 +18,8 @@ namespace {
 PGconn* pg_connect(const std::string& conninfo) {
     PGconn* conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
+        std::string err = PQerrorMessage(conn);
+        std::cerr << "[pg_connect] Connection failed: " << err << std::endl;
         PQfinish(conn);
         return nullptr;
     }
@@ -47,6 +49,33 @@ std::string timestamp_now() {
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
     return std::string(buf);
+}
+
+// Map domain ImportStatus to PostgreSQL VARCHAR string.
+std::string status_to_pg_string(domain::ImportStatus s) {
+    switch (s) {
+        case domain::ImportStatus::Queued:     return "pending";
+        case domain::ImportStatus::Converting: return "converting";
+        case domain::ImportStatus::Completed:  return "completed";
+        case domain::ImportStatus::Failed:     return "failed";
+        default:                               return "pending";
+    }
+}
+
+// Parse PostgreSQL VARCHAR status string to domain ImportStatus.
+domain::ImportStatus string_to_import_status(const std::string& s) {
+    // Handle legacy numeric status values written by the old implementation.
+    // The previous code wrote integers (0,1,2,3) as text into the VARCHAR status column.
+    // Map them back to the canonical string form so upgraded DBs read correctly.
+    if (s == "0") return domain::ImportStatus::Queued;
+    if (s == "1") return domain::ImportStatus::Converting;
+    if (s == "2") return domain::ImportStatus::Completed;
+    if (s == "3") return domain::ImportStatus::Failed;
+
+    if (s == "completed") return domain::ImportStatus::Completed;
+    if (s == "converting") return domain::ImportStatus::Converting;
+    if (s == "failed") return domain::ImportStatus::Failed;
+    return domain::ImportStatus::Queued;  // "pending" or unknown
 }
 
 // Parse PostgreSQL TIMESTAMPTZ string to time_point
@@ -95,7 +124,7 @@ domain::ImportRecord row_to_import(char** values, int nfields) {
             r.output_hash[i] = static_cast<uint8_t>(strtoul(byte_str, nullptr, 16));
         }
     }
-    r.status           = values[12] ? static_cast<domain::ImportStatus>(std::atoi(values[12]))
+    r.status           = values[12] ? string_to_import_status(values[12])
                                    : domain::ImportStatus::Queued;  // status is column 13
     r.error_message    = values[16] ? values[16] : "";  // error_message is column 17
     // source_fingerprint columns (20, 21, 22 - indices 19, 20, 21)
@@ -138,17 +167,31 @@ std::optional<int64_t> PostgresqlImportStore::create_import(const domain::Import
     if (!conn) return std::nullopt;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
+    // Atomically get next sequence_id from the PostgreSQL sequence
+    int64_t sequence_id = -1;
+    PGresult* seq_res = PQexec(pgconn, "SELECT nextval('imports_sequence_id_seq')");
+    if (PQresultStatus(seq_res) == PGRES_TUPLES_OK && PQntuples(seq_res) > 0) {
+        sequence_id = std::atoll(PQgetvalue(seq_res, 0, 0));
+    }
+    PQclear(seq_res);
+    if (sequence_id <= 0) {
+        drop_(conn);
+        return std::nullopt;
+    }
+
     std::string source_hash_hex = domain::sha256_hex(rec.source_hash);
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
     std::ostringstream sql;
-    sql << "INSERT INTO imports (source_path, source_hash, output_path, output_hash, status, error_message,"
+    sql << "INSERT INTO imports (sequence_id, source_path, source_hash, output_path, output_hash, status, error_message,"
            " source_fingerprint_size, source_fingerprint_mtime, source_fingerprint_fnv1a,"
            " created_at, started_at, completed_at)"
-           << " VALUES ('" << pg_escape(pgconn, rec.source_path.native) << "',"
+           << " VALUES ("
+           << sequence_id << ","
+           << "'" << pg_escape(pgconn, rec.source_path.native) << "',"
            << "'" << source_hash_hex << "',"
            << "'" << pg_escape(pgconn, rec.output_path.native) << "',"
            << "'" << output_hash_hex << "',"
-           << static_cast<int>(rec.status) << ","
+           << "'" << status_to_pg_string(rec.status) << "',"
            << "'" << pg_escape(pgconn, rec.error_message) << "',"
            << rec.source_fingerprint.size_bytes << ","
            << rec.source_fingerprint.mtime.time_since_epoch().count() << ","
@@ -219,7 +262,7 @@ bool PostgresqlImportStore::update_import(domain::ImportRecord rec) {
     if (!conn) return false;
     PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
 
-    std::string status_str = std::to_string(static_cast<int>(rec.status));
+    std::string status_str = status_to_pg_string(rec.status);
     std::string error_str = pg_escape(pgconn, rec.error_message);
     std::string output_str = pg_escape(pgconn, rec.output_path.native);
     std::string output_hash_hex = domain::sha256_hex(rec.output_hash);
@@ -245,7 +288,7 @@ std::vector<domain::ImportRecord> PostgresqlImportStore::list_imports(
     std::ostringstream sql;
     sql << "SELECT * FROM imports";
     if (status_filter.has_value())
-        sql << " WHERE status=" << static_cast<int>(*status_filter);
+        sql << " WHERE status='" << status_to_pg_string(*status_filter) << "'";
     sql << " ORDER BY sequence_id DESC";
 
     PGresult* res = PQexec(pgconn, sql.str().c_str());
@@ -498,6 +541,8 @@ bool PostgresqlImportStore::init_schema() {
         "    name VARCHAR(32) NOT NULL UNIQUE,"
         "    created_at TIMESTAMPTZ DEFAULT NOW()"
         ")",
+        "INSERT INTO sequences (name) VALUES ('import') ON CONFLICT (name) DO NOTHING",
+        "CREATE SEQUENCE IF NOT EXISTS imports_sequence_id_seq",
         // imports
         "CREATE TABLE IF NOT EXISTS imports ("
         "    id BIGSERIAL PRIMARY KEY,"
@@ -521,7 +566,7 @@ bool PostgresqlImportStore::init_schema() {
         "    orientation SMALLINT,"
         "    source_fingerprint_size BIGINT,"
         "    source_fingerprint_mtime BIGINT,"
-        "    source_fingerprint_fnv1a BIGINT"
+        "    source_fingerprint_fnv1a NUMERIC(20)"
         ")",
         "CREATE INDEX IF NOT EXISTS idx_imports_source_hash ON imports(source_hash)",
         "CREATE INDEX IF NOT EXISTS idx_imports_output_hash ON imports(output_hash)",
@@ -587,12 +632,6 @@ bool PostgresqlImportStore::init_schema() {
         "CREATE INDEX IF NOT EXISTS idx_preview_edits_edited_at ON preview_edits(edited_at)",
         // foreign keys
         "DO $$ BEGIN "
-        "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_imports_sequence') THEN "
-        "    ALTER TABLE imports ADD CONSTRAINT fk_imports_sequence "
-        "    FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE RESTRICT; "
-        "  END IF; "
-        "END $$",
-        "DO $$ BEGIN "
         "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_reconversions_import') THEN "
         "    ALTER TABLE reconversions ADD CONSTRAINT fk_reconversions_import "
         "    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE; "
@@ -610,6 +649,118 @@ bool PostgresqlImportStore::init_schema() {
         PGresult* res = PQexec(pgconn, sql);
         if (PQresultStatus(res) != PGRES_COMMAND_OK && PQresultStatus(res) != PGRES_TUPLES_OK) {
             std::cerr << "Schema init failed: " << PQerrorMessage(pgconn) << " (SQL: " << sql << ")\n";
+            PQclear(res);
+            drop_(conn);
+            return false;
+        }
+        PQclear(res);
+    }
+
+    // ── Defect A: Synchronize sequence with existing data and add UNIQUE constraint ──
+    // Set sequence to start after the maximum existing sequence_id, so upgraded DBs
+    // don't reissue historical IDs. Guard: only restart if max > 0 (fresh DB stays at 1).
+    {
+        PGresult* max_res = PQexec(pgconn,
+            "SELECT COALESCE(MAX(sequence_id),0) FROM imports");
+        if (PQresultStatus(max_res) == PGRES_TUPLES_OK && PQntuples(max_res) > 0) {
+            int64_t max_id = std::atoll(PQgetvalue(max_res, 0, 0));
+            if (max_id > 0) {
+                std::string alter_seq = "ALTER SEQUENCE imports_sequence_id_seq RESTART WITH " +
+                    std::to_string(max_id + 1);
+                PGresult* alter_res = PQexec(pgconn, alter_seq.c_str());
+                if (PQresultStatus(alter_res) != PGRES_COMMAND_OK) {
+                    std::cerr << "ALTER SEQUENCE failed: " << PQerrorMessage(pgconn) << "\n";
+                }
+                PQclear(alter_res);
+            }
+        }
+        PQclear(max_res);
+
+        // Add UNIQUE constraint on imports.sequence_id idempotently.
+        // First check for duplicates; only add the constraint if no duplicates exist,
+        // otherwise surface a clear error rather than silently failing.
+        PGresult* dup_res = PQexec(pgconn,
+            "SELECT sequence_id, COUNT(*) FROM imports GROUP BY sequence_id HAVING COUNT(*) > 1");
+        bool has_duplicates = false;
+        if (PQresultStatus(dup_res) == PGRES_TUPLES_OK && PQntuples(dup_res) > 0) {
+            has_duplicates = true;
+        }
+        PQclear(dup_res);
+
+        if (!has_duplicates) {
+            PGresult* constraint_res = PQexec(pgconn,
+                "DO $$ BEGIN "
+                "  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_imports_sequence_id') THEN "
+                "    ALTER TABLE imports ADD CONSTRAINT uq_imports_sequence_id UNIQUE (sequence_id) "
+                "  END IF; "
+                "END $$");
+            if (PQresultStatus(constraint_res) != PGRES_COMMAND_OK) {
+                std::cerr << "Adding UNIQUE constraint on sequence_id failed: "
+                          << PQerrorMessage(pgconn) << "\n";
+            }
+            PQclear(constraint_res);
+        } else {
+            std::cerr << "WARNING: Duplicate sequence_id values exist in imports table. "
+                      "UNIQUE constraint not added. Remove or fix duplicates before adding the constraint.\n";
+        }
+
+    // ── Defect B: One-time normalization of legacy numeric statuses ──
+    // Rewrite numeric status values ('0','1','2','3') to canonical string form.
+    // This is safe to run multiple times (idempotent) — it just sets the same values again.
+        PGresult* norm_res = PQexec(pgconn,
+            "UPDATE imports SET status = 'queued' WHERE status = '0'");
+        if (PQresultStatus(norm_res) == PGRES_COMMAND_OK) {
+            std::cerr << "Normalized " << PQcmdTuples(norm_res) << " rows from legacy '0' to 'queued'\n";
+        }
+        PQclear(norm_res);
+
+        norm_res = PQexec(pgconn,
+            "UPDATE imports SET status = 'converting' WHERE status = '1'");
+        if (PQresultStatus(norm_res) == PGRES_COMMAND_OK) {
+            std::cerr << "Normalized " << PQcmdTuples(norm_res) << " rows from legacy '1' to 'converting'\n";
+        }
+        PQclear(norm_res);
+
+        norm_res = PQexec(pgconn,
+            "UPDATE imports SET status = 'completed' WHERE status = '2'");
+        if (PQresultStatus(norm_res) == PGRES_COMMAND_OK) {
+            std::cerr << "Normalized " << PQcmdTuples(norm_res) << " rows from legacy '2' to 'completed'\n";
+        }
+        PQclear(norm_res);
+
+        norm_res = PQexec(pgconn,
+            "UPDATE imports SET status = 'failed' WHERE status = '3'");
+        if (PQresultStatus(norm_res) == PGRES_COMMAND_OK) {
+            std::cerr << "Normalized " << PQcmdTuples(norm_res) << " rows from legacy '3' to 'failed'\n";
+        }
+        PQclear(norm_res);
+    }
+
+    drop_(conn);
+    return true;
+}
+
+bool PostgresqlImportStore::truncate_test_data() {
+    auto conn = connect_();
+    if (!conn) return false;
+    PGconn* pgconn = reinterpret_cast<PGconn*>(conn);
+
+    // Truncate test data tables in dependency order (children first due to FKs)
+    const char* truncate_sql[] = {
+        "TRUNCATE TABLE preview_edits RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE alerts RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE locks RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE reconversions RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE imports RESTART IDENTITY CASCADE",
+        // Reset sequences table
+        "DELETE FROM sequences",
+        "ALTER SEQUENCE imports_sequence_id_seq RESTART WITH 1"
+    };
+
+    for (const char* sql : truncate_sql) {
+        PGresult* res = PQexec(pgconn, sql);
+        if (PQresultStatus(res) != PGRES_COMMAND_OK && PQresultStatus(res) != PGRES_TUPLES_OK) {
+            std::cerr << "Truncate test data failed: " << PQerrorMessage(pgconn) << " (SQL: " << sql << ")\n";
             PQclear(res);
             drop_(conn);
             return false;
