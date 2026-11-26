@@ -533,6 +533,128 @@ bool MariadbImportStore::init_schema() {
     auto conn = connect_();
     if (!conn) return false;
 
+    // ── Idempotent upgrade path for existing MariaDB installs ────────────────────
+    // Run BEFORE schema_sql so that columns exist before CREATE TABLE IF NOT EXISTS
+    // and INSERT IGNORE statements. On a fresh DB the tables don't exist yet and
+    // the steps are silently skipped; on a legacy DB missing columns are added so
+    // that the subsequent INSERT IGNORE succeeds.
+    //
+    // 1. Add seq_name to sequences if missing (legacy has `name` column instead)
+    // 2. Add next_val to sequences if missing, backfill from imports
+    // 3. Add started_at to imports if absent
+    // 4. Drop obsolete imports.sequence_id -> sequences(id) FK if present
+
+    // Helper: execute a SQL statement and reconnect on error
+    auto do_sql = [&](const char* sql) -> bool {
+        if (mysql_query(conn, sql) != 0) {
+            std::cerr << "SQL upgrade step failed: " << mysql_error(conn) << " (SQL: " << sql << ")\n";
+            drop_(conn);
+            conn = connect_();
+            if (!conn) return false;
+            return false;
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return true;
+    };
+
+    // Helper: check whether a column exists in a given table
+    auto col_exists = [&](const char* table, const char* col) -> bool {
+        std::ostringstream q;
+        q << "SELECT COUNT(*) FROM information_schema.COLUMNS "
+          << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << table
+          << "' AND COLUMN_NAME = '" << col << "'";
+        if (!do_sql(q.str().c_str())) return false;
+        MYSQL_RES* r = mysql_store_result(conn);
+        bool exists = false;
+        if (r) {
+            MYSQL_ROW row = mysql_fetch_row(r);
+            exists = (row && row[0] && std::atoi(row[0]) > 0);
+            mysql_free_result(r);
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return exists;
+    };
+
+    // Helper: check whether a table exists
+    auto table_exists = [&](const char* tbl) -> bool {
+        std::ostringstream q;
+        q << "SELECT COUNT(*) FROM information_schema.TABLES "
+          << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" << tbl << "'";
+        if (!do_sql(q.str().c_str())) return false;
+        MYSQL_RES* r = mysql_store_result(conn);
+        bool ex = false;
+        if (r) {
+            MYSQL_ROW row = mysql_fetch_row(r);
+            ex = (row && row[0] && std::atoi(row[0]) > 0);
+            mysql_free_result(r);
+        }
+        drop_(conn);
+        conn = connect_();
+        if (!conn) return false;
+        return ex;
+    };
+
+    // 1. Add seq_name to sequences if missing
+    if (table_exists("sequences")) {
+        if (!col_exists("sequences", "seq_name")) {
+            if (!do_sql("ALTER TABLE sequences ADD COLUMN `seq_name` VARCHAR(32) NULL DEFAULT NULL AFTER `id`")) return false;
+            if (col_exists("sequences", "name")) {
+                do_sql("UPDATE sequences SET seq_name = name");
+            }
+        }
+    }
+
+    // 2. Add next_val to sequences if missing, backfill
+    if (table_exists("sequences")) {
+        if (!col_exists("sequences", "next_val")) {
+            if (!do_sql("ALTER TABLE sequences ADD COLUMN `next_val` BIGINT UNSIGNED NOT NULL DEFAULT 1")) return false;
+            if (!do_sql("UPDATE sequences s JOIN (SELECT COALESCE(MAX(sequence_id),0) AS mx FROM imports) i SET s.next_val = i.mx + 1 WHERE s.seq_name = 'import'")) return false;
+        }
+    }
+
+    // 3. Add started_at to imports if absent
+    if (table_exists("imports")) {
+        if (!col_exists("imports", "started_at")) {
+            if (!do_sql("ALTER TABLE imports ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL")) return false;
+        }
+    }
+
+    // 4. Drop obsolete imports.sequence_id -> sequences(id) FK if present
+    if (table_exists("imports")) {
+        std::ostringstream fk_check;
+        fk_check << "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS "
+                 << "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'imports' "
+                 << "AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
+        if (do_sql(fk_check.str().c_str())) {
+            MYSQL_RES* fkres = mysql_store_result(conn);
+            if (fkres) {
+                while (MYSQL_ROW fkrow = mysql_fetch_row(fkres)) {
+                    std::string fkname = fkrow[0];
+                    std::ostringstream ref_q;
+                    ref_q << "SELECT REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE "
+                          << "WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = '" << fkname << "'";
+                    if (do_sql(ref_q.str().c_str())) {
+                        MYSQL_RES* tres = mysql_store_result(conn);
+                        if (tres) {
+                            MYSQL_ROW trow = mysql_fetch_row(tres);
+                            if (trow && std::string(trow[0]) == "sequences") {
+                                std::ostringstream drop_sql;
+                                drop_sql << "ALTER TABLE imports DROP FOREIGN KEY " << fkname;
+                                do_sql(drop_sql.str().c_str());
+                            }
+                            mysql_free_result(tres);
+                        }
+                    }
+                }
+                mysql_free_result(fkres);
+            }
+        }
+    }
+
     // MariaDB/MySQL schema (uses backticks for identifiers)
     const char* schema_sql[] = {
         // sequences
